@@ -1,12 +1,3 @@
----
-name: Pull Request
-about: Propose changes or fixes to the codebase
-title: ''
-labels: ''
-type: ''
-assignees: ''
----
-
 ## Related Issue
 (Please link the issue that this PR addresses. e.g., Closes #123)
 
