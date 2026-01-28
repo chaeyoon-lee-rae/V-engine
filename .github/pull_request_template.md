@@ -29,4 +29,4 @@ assignees: ''
 ### Results
 
 ## Performance & Memory Impact (Optional)
-(Does this PR affect frame time, CPU/GPU usage, or VRAM consumption? Please provide before/after comparisons if possible.)
+(Does this PR affect frame time, CPU/GPU usage, or VRAM consumption? Please provide before/afte comparisons if possible.)
