@@ -7,16 +7,16 @@ type: ''
 assignees: ''
 ---
 
-## 🔗 Related Issue
+## Related Issue
 (Please link the issue that this PR addresses. e.g., Closes #123)
 
-## 🛠️ Key Changes
+## Key Changes
 (Describe the changes you've made. How does this PR solve the problem or implement the feature?)
 
-## 🔬 Technical Details & Implementation
+## Technical Details & Implementation
 (Why did you choose this implementation? If applicable, mention architectural changes or specific techniques used.)
 
-## 🧪 Test Results & Screenshots
+## Test Results & Screenshots
 ### Environment
 - **OS**: [e.g. Windows 11, Ubuntu 22.04]
 - **GPU**: [e.g. RTX 4090, 24GB VRAM]
@@ -28,5 +28,5 @@ assignees: ''
 
 ### Results
 
-## 📊 Performance & Memory Impact (Optional)
+## Performance & Memory Impact (Optional)
 (Does this PR affect frame time, CPU/GPU usage, or VRAM consumption? Please provide before/after comparisons if possible.)
