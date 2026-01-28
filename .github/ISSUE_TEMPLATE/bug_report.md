@@ -25,12 +25,7 @@ assignees: ''
 (Please analyze the underlying cause. We encourage using AI tools to analyze error logs.)
 
 ## Proposed Solution (Optional)
-```C++
-// Current broken code
-```
-
-```C++
-// Your proposed code change
-```
+(If you have a fix in mind, please describe it. Code snippets or pseudocode are welcome.)
 
 ## Additional Context (Optional)
+(Add any other context about the problem here, such as screenshots, config files, or related issues.)

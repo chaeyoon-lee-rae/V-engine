@@ -1,36 +1,32 @@
 ---
 name: Pull Request
-about: Create a report to help us improve
+about: Propose changes or fixes to the codebase
 title: ''
-labels: bug
-type: bug
+labels: ''
+type: ''
 assignees: ''
 ---
 
-## Environment
+## 🔗 Related Issue
+(Please link the issue that this PR addresses. e.g., Closes #123)
+
+## 🛠️ Key Changes
+(Describe the changes you've made. How does this PR solve the problem or implement the feature?)
+
+## 🔬 Technical Details & Implementation
+(Why did you choose this implementation? If applicable, mention architectural changes or specific techniques used.)
+
+## 🧪 Test Results & Screenshots
+### Environment
 - **OS**: [e.g. Windows 11, Ubuntu 22.04]
 - **GPU**: [e.g. RTX 4090, 24GB VRAM]
 - **Driver Version**: [e.g. NVIDIA 536.23]
 - **Compiler / Toolchain**: [e.g. MSVC v143, CMake 3.28]
-- **Model / Data Size (Optional)**: [e.g. TinyLlama 4.5GB, 10M polygons]
 
-## Error Log & Stack Trace
-(Paste Error Logs Here)
+### Test Case
+[e.g., Loaded 5GB Model, Ran for 1000 frames]
 
-## Steps to Reproduce
-1. ...
-2. ...
+### Results
 
-## Root Cause Analysis
-(Please analyze the underlying cause. We encourage using AI tools to analyze error logs.)
-
-## Proposed Solution (Optional)
-```C++
-// Current broken code
-```
-
-```C++
-// Your proposed code change
-```
-
-## Additional Context (Optional)
+## 📊 Performance & Memory Impact (Optional)
+(Does this PR affect frame time, CPU/GPU usage, or VRAM consumption? Please provide before/after comparisons if possible.)
