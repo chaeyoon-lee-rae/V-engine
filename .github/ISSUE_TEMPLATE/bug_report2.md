@@ -1,38 +1,36 @@
 ---
-name: Bug report
+name: Bug Report
 about: Create a report to help us improve
 title: ''
-labels: ''
+labels: bug
+type: bug
 assignees: ''
-
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## Environment
+- **OS**: [e.g. Windows 11, Ubuntu 22.04]
+- **GPU**: [e.g. RTX 4090, 24GB VRAM]
+- **Driver Version**: [e.g. NVIDIA 536.23]
+- **Compiler / Toolchain**: [e.g. MSVC v143, CMake 3.28]
+- **Model / Data Size (Optional)**: [e.g. TinyLlama 4.5GB, 10M polygons]
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+## Error Log & Stack Trace
+(Paste Error Logs Here)
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## Steps to Reproduce
+1. ...
+2. ...
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+## Root Cause Analysis
+(Please analyze the underlying cause. We encourage using AI tools to analyze error logs.)
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+## Proposed Solution (Optional)
+```C++
+// Current broken code
+```
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+```C++
+// Your proposed code change
+```
 
-**Additional context**
-Add any other context about the problem here.
+## Additional Context (Optional)
