@@ -26,11 +26,11 @@ if(ENABLE_CPP20_MODULE)
   add_library(VulkanCppModule)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
 
-  target_compile_definitions(VulkanCppModule PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1)
+  target_compile_definitions(VulkanCppModule PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1 VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING)
   target_include_directories(VulkanCppModule PUBLIC "${Vulkan_INCLUDE_DIR}")
   target_link_libraries(VulkanCppModule PUBLIC Vulkan::Vulkan)
 
-  set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 20)
+  set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 23)
 
   # Add MSVC-specific compiler options for proper C++ module support
   if(MSVC)
@@ -80,7 +80,7 @@ set(TEMPLATE_DIR ${CMAKE_BINARY_DIR}/${TEMPLATE_NAME})
 
 add_executable (${TEMPLATE_NAME} main.cpp)
 set_target_properties (${TEMPLATE_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEMPLATE_DIR})
-set_target_properties (${TEMPLATE_NAME} PROPERTIES CXX_STANDARD 20)
+set_target_properties (${TEMPLATE_NAME} PROPERTIES CXX_STANDARD 23)
 target_link_libraries (${TEMPLATE_NAME} Vulkan::cppm glfw)
 target_include_directories (${TEMPLATE_NAME} PRIVATE ${STB_INCLUDEDIR} ${TINYGLTF_INCLUDE_DIR})
 
@@ -103,12 +103,12 @@ set (SHADER_TARGET ${TEMPLATE_NAME}Shader)
 set (SHADERS_DIR ${TEMPLATE_DIR}/shaders)
 set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shader.slang")
 set (ENTRY_POINTS -entry vertMain -entry fragMain)
-add_custom_command(OUTPUT ${SHADERS_DIR} COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR})
 add_custom_command(
   OUTPUT  ${SHADERS_DIR}/slang.spv
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
   COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o ${TEMPLATE_DIR}/shaders/slang.spv
-  WORKING_DIRECTORY ${SHADERS_DIR}
-  DEPENDS ${SHADERS_DIR} ${SHADER_SOURCES}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  DEPENDS ${SHADER_SOURCES}
   COMMENT "Compiling Slang Shaders"
   VERBATIM
 )
