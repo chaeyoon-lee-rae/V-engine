@@ -10,8 +10,8 @@ import vulkan;
 #include <GLFW/glfw3.h>
 #include <cstdlib>
 
-const uint32_t WIDTH  = 800;
-const uint32_t HEIGHT = 600;
+const uint32_t WIDTH  = 1200;
+const uint32_t HEIGHT = 800;
 
 const std::vector<char const*> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
@@ -39,6 +39,7 @@ class HelloTriangleApplication
 
 	vk::raii::Context context;
 	vk::raii::Instance instance = nullptr;
+	vk::raii::PhysicalDevice physicalDevice = nullptr;
 
 	void initWindow()
 	{
@@ -53,8 +54,10 @@ class HelloTriangleApplication
 	void initVulkan()
 	{
 		createInstance();
+		pickPhysicalDevice();
 	}
 
+	// Instance
 	std::vector<const char*> getRequiredInstanceExtensions() {
 		uint32_t glfwExtensionCount = 0;
 		auto glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -64,7 +67,8 @@ class HelloTriangleApplication
 		return extensions;
 	}
 
-	void createInstance() {
+	void createInstance() 
+	{
 		constexpr vk::ApplicationInfo appInfo{
 			.pApplicationName = "Hello Triangle",
 			.applicationVersion = vk::makeApiVersion(0,1,0,0),
@@ -109,6 +113,50 @@ class HelloTriangleApplication
 		};
 
 		instance = vk::raii::Instance(context, createInfo);
+	}
+
+	// Physical device
+	std::vector<const char*> requiredDeviceExtension = { vk::KHRSwapchainExtensionName };
+
+	bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice)
+	{
+		bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
+
+		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+		bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const& qfp) {
+			return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+		});
+
+		auto availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
+		bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, [&availableDeviceExtensions](auto const& requiredDeviceExtension) {
+			return std::ranges::any_of(availableDeviceExtensions, [requiredDeviceExtension](auto const& availableDeviceExtension) {
+				return strcmp(availableDeviceExtension.extensionName, requiredDeviceExtension) == 0;
+				});
+			});
+
+		auto features = physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+
+		return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+	}
+
+	void pickPhysicalDevice() 
+	{
+		auto physicalDevices = instance.enumeratePhysicalDevices();
+
+		for (auto& device : physicalDevices)
+			std::cout << "Selected GPU : " << static_cast<const char*>(device.getProperties().deviceName) << "\n";
+
+		auto const devIter = std::ranges::find_if(physicalDevices, [&](auto const& physicalDevice) {
+				return isDeviceSuitable(physicalDevice);
+			});
+
+		if (devIter == physicalDevices.end()) {
+			throw std::runtime_error("failed to find a suitable GPU!");
+		}
+
+		physicalDevice = *devIter;
 	}
 
 	void mainLoop()
