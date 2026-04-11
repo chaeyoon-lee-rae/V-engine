@@ -120,13 +120,16 @@ class HelloTriangleApplication
 
 	bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice)
 	{
+		// Properties
 		bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
 
+		// Queue family
 		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
 		bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const& qfp) {
 			return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
 		});
 
+		// Device extensions
 		auto availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
 		bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, [&availableDeviceExtensions](auto const& requiredDeviceExtension) {
 			return std::ranges::any_of(availableDeviceExtensions, [requiredDeviceExtension](auto const& availableDeviceExtension) {
@@ -134,6 +137,7 @@ class HelloTriangleApplication
 				});
 			});
 
+		// Device features
 		auto features = physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
 			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
