@@ -40,6 +40,8 @@ class HelloTriangleApplication
 	vk::raii::Context context;
 	vk::raii::Instance instance = nullptr;
 	vk::raii::PhysicalDevice physicalDevice = nullptr;
+	vk::raii::Device device = nullptr;
+	vk::raii::Queue graphicsQueue = nullptr;
 
 	void initWindow()
 	{
@@ -55,6 +57,7 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		pickPhysicalDevice();
+		createLogicalDevice();
 	}
 
 	// Instance
@@ -149,9 +152,6 @@ class HelloTriangleApplication
 	{
 		auto physicalDevices = instance.enumeratePhysicalDevices();
 
-		for (auto& device : physicalDevices)
-			std::cout << "Selected GPU : " << static_cast<const char*>(device.getProperties().deviceName) << "\n";
-
 		auto const devIter = std::ranges::find_if(physicalDevices, [&](auto const& physicalDevice) {
 				return isDeviceSuitable(physicalDevice);
 			});
@@ -161,6 +161,41 @@ class HelloTriangleApplication
 		}
 
 		physicalDevice = *devIter;
+
+		std::cout << "Selected GPU : " << static_cast<const char*>(physicalDevice.getProperties().deviceName) << "\n";
+	}
+
+	// Logical device
+	void createLogicalDevice()
+	{
+		// Queue
+		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+		auto graphicsQueueFamilyProperty = std::ranges::find_if(queueFamilyProperties, [](auto const& qfp) { return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0); });
+		auto graphicsIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
+		float queuePriority = 0.5f;
+		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{ .queueFamilyIndex = graphicsIndex, .queueCount = 1, .pQueuePriorities = &queuePriority };
+
+		// Feature structures (chained)
+		vk::StructureChain<vk::PhysicalDeviceFeatures2, 
+						   vk::PhysicalDeviceVulkan13Features, 
+						   vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> 
+			featureChain = {
+				{},
+				{.dynamicRendering = true },
+				{.extendedDynamicState = true }
+			};	// now vulkan automatically connects pNext
+
+		// Create a device
+		vk::DeviceCreateInfo deviceCreateInfo{
+			.pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+			.queueCreateInfoCount = 1,
+			.pQueueCreateInfos = &deviceQueueCreateInfo,
+			.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtension.size()),
+			.ppEnabledExtensionNames = requiredDeviceExtension.data(),
+		};
+
+		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+		graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);	// Queue handle
 	}
 
 	void mainLoop()
