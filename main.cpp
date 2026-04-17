@@ -1,13 +1,15 @@
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <memory>
 #	include <vulkan/vulkan_raii.hpp>
-#	include <cstdlib>
 #	include <iostream>
 #	include <stdexcept>
 #else
 import vulkan;
 #endif
+
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <cstdlib>
 
 const uint32_t WIDTH  = 1200;
 const uint32_t HEIGHT = 800;
@@ -164,7 +166,7 @@ class HelloTriangleApplication
 		auto physicalDevices = instance.enumeratePhysicalDevices();
 
 		auto const devIter = std::ranges::find_if(physicalDevices, [&](auto const& physicalDevice) {
-				return isDeviceSuitable(physicalDevice);
+			return isDeviceSuitable(physicalDevice);
 			});
 
 		if (devIter == physicalDevices.end()) {
