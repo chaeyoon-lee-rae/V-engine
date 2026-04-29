@@ -51,6 +51,8 @@ class HelloTriangleApplication
 	vk::SurfaceFormatKHR swapChainSurfaceFormat;
 	vk::Extent2D swapchainExtent;
 
+	std::vector<vk::raii::ImageView> swapChinImageViews;
+
 	void initWindow()
 	{
 		glfwInit();
@@ -68,6 +70,7 @@ class HelloTriangleApplication
 		pickPhysicalDevice();
 		createLogicalDevice();
 		createSwapChain();
+		createImageViews();
 	}
 
 	// Instance
@@ -230,6 +233,7 @@ class HelloTriangleApplication
 		graphicsQueue = vk::raii::Queue(device, queueIndex, 0);	// Queue handle
 	}
 
+	// Swap chain
 	vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats)
 	{
 		const auto formatIt = std::ranges::find_if(
@@ -304,6 +308,23 @@ class HelloTriangleApplication
 
 		swapChain = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
 		swapChainImages = swapChain.getImages();
+	}
+
+	// Image views
+	void createImageViews()
+	{
+		assert(swapChinImageViews.empty());
+
+		vk::ImageViewCreateInfo imageViewCreateInfo{
+			.viewType = vk::ImageViewType::e2D,
+			.format = swapChainSurfaceFormat.format,
+			.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+		};
+
+		for (auto& image : swapChainImages) {
+			imageViewCreateInfo.image = image;
+			swapChinImageViews.emplace_back(device, imageViewCreateInfo);
+		}
 	}
 
 	void mainLoop()
