@@ -2,6 +2,7 @@
 #	include <memory>
 #	include <vulkan/vulkan_raii.hpp>
 #	include <iostream>
+#	include <fstream>
 #	include <stdexcept>
 #else
 import vulkan;
@@ -27,7 +28,7 @@ constexpr bool enableValidationLayers = true;
 
 class HelloTriangleApplication
 {
-  public:
+public:
 	void run()
 	{
 		initWindow();
@@ -36,8 +37,8 @@ class HelloTriangleApplication
 		cleanup();
 	}
 
-  private:
-	GLFWwindow *window = nullptr;
+private:
+	GLFWwindow* window = nullptr;
 
 	vk::raii::Context context;
 	vk::raii::Instance instance = nullptr;
@@ -71,6 +72,7 @@ class HelloTriangleApplication
 		createLogicalDevice();
 		createSwapChain();
 		createImageViews();
+		createGraphicsPipeline();
 	}
 
 	// Instance
@@ -83,7 +85,7 @@ class HelloTriangleApplication
 		return extensions;
 	}
 
-	void createInstance() 
+	void createInstance()
 	{
 		constexpr vk::ApplicationInfo appInfo{
 			.pApplicationName = "Hello Triangle",
@@ -114,7 +116,9 @@ class HelloTriangleApplication
 		auto extensionProperties = context.enumerateInstanceExtensionProperties();
 		auto unsupportedExtensionIt = std::ranges::find_if(requiredExtensions, [&extensionProperties](auto const& requiredExtension) {
 			return std::ranges::none_of(extensionProperties,
-				[requiredExtension](auto const& extensionProperty) { return strcmp(extensionProperty.extensionName, requiredExtension) == 0; });
+				[requiredExtension](auto const& extensionProperty) { 
+					return strcmp(extensionProperty.extensionName, requiredExtension) == 0; 
+				});
 			});
 		if (unsupportedExtensionIt != requiredExtensions.end())
 			throw std::runtime_error("Required GLFW extension not supported: " + std::string(*unsupportedExtensionIt));
@@ -153,7 +157,7 @@ class HelloTriangleApplication
 		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
 		bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const& qfp) {
 			return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
-		});
+			});
 
 		// Device extensions
 		auto availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
@@ -164,14 +168,19 @@ class HelloTriangleApplication
 			});
 
 		// Device features
-		auto features = physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-		bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+		auto features = physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2, 
+														     vk::PhysicalDeviceVulkan13Features, 
+															 vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+															 vk::PhysicalDeviceVulkan11Features>();
+		bool supportsRequiredFeatures = 
+			features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
+			features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters;
 
 		return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
 	}
 
-	void pickPhysicalDevice() 
+	void pickPhysicalDevice()
 	{
 		auto physicalDevices = instance.enumeratePhysicalDevices();
 
@@ -199,7 +208,7 @@ class HelloTriangleApplication
 		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); ++qfpIndex) {
 			if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
 				physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
-				queueIndex = qfpIndex; 
+				queueIndex = qfpIndex;
 				break;
 			}
 		}
@@ -207,19 +216,21 @@ class HelloTriangleApplication
 			throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
 
 		// Feature structures (chained)
-		vk::StructureChain<vk::PhysicalDeviceFeatures2, 
-						   vk::PhysicalDeviceVulkan13Features, 
-						   vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> 
+		vk::StructureChain<vk::PhysicalDeviceFeatures2,
+			vk::PhysicalDeviceVulkan13Features,
+			vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+			vk::PhysicalDeviceVulkan11Features>
 			featureChain = {
 				{},
 				{.dynamicRendering = true },
-				{.extendedDynamicState = true }
-			};	// now vulkan automatically connects pNext
+				{.extendedDynamicState = true },
+				{.shaderDrawParameters = true }, 
+		};	// now vulkan automatically connects pNext
 
 		// Create a device
 		float queuePriority = 0.5f;
-		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{ .queueFamilyIndex = queueIndex, 
-														 .queueCount = 1, 
+		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{ .queueFamilyIndex = queueIndex,
+														 .queueCount = 1,
 														 .pQueuePriorities = &queuePriority };
 		vk::DeviceCreateInfo deviceCreateInfo{
 			.pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
@@ -247,13 +258,13 @@ class HelloTriangleApplication
 
 	vk::PresentModeKHR chooseSwapPresentMode(std::vector<vk::PresentModeKHR> const& availablePresentModes)
 	{
-		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { 
+		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) {
 			return presentMode == vk::PresentModeKHR::eFifo; }));
 
 		return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) {
-			return value == vk::PresentModeKHR::eMailbox; }) ? 
-			vk::PresentModeKHR::eMailbox : 
-			vk::PresentModeKHR::eFifo;
+			return value == vk::PresentModeKHR::eMailbox; }) ?
+			vk::PresentModeKHR::eMailbox :
+				vk::PresentModeKHR::eFifo;
 	}
 
 	vk::Extent2D chooseSwapExtent(vk::SurfaceCapabilitiesKHR const& capabilites)
@@ -283,11 +294,11 @@ class HelloTriangleApplication
 	{
 		std::vector<vk::SurfaceFormatKHR> availableFormats = physicalDevice.getSurfaceFormatsKHR(*surface);
 		swapChainSurfaceFormat = chooseSwapSurfaceFormat(availableFormats);
-		
+
 		std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(*surface);
 		auto availablePresentMode = chooseSwapPresentMode(availablePresentModes);
 
-		vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR( *surface );
+		vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
 		swapchainExtent = chooseSwapExtent(surfaceCapabilities);
 		uint32_t minImageCount = chooseSwapMinImageCount(surfaceCapabilities);
 
@@ -325,6 +336,54 @@ class HelloTriangleApplication
 			imageViewCreateInfo.image = image;
 			swapChinImageViews.emplace_back(device, imageViewCreateInfo);
 		}
+	}
+
+	// Graphics pipeline
+	static std::vector<char> readFile(const std::string& filename) {
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+		if (!file.is_open()) {
+			throw std::runtime_error("failed to open file!");
+		}
+
+		std::vector<char> buffer(file.tellg());
+
+		file.seekg(0, std::ios::beg);
+		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+
+		file.close();
+		return buffer;
+	}
+
+	[[nodiscard]]
+	vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const {
+		vk::ShaderModuleCreateInfo createInfo{
+			.codeSize = code.size() * sizeof(char),
+			.pCode = reinterpret_cast<const uint32_t*>(code.data()),
+		};
+
+		vk::raii::ShaderModule shaderModule{ device, createInfo };
+
+		return shaderModule;
+	}
+
+	void createGraphicsPipeline()
+	{
+		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
+
+		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
+			.stage = vk::ShaderStageFlagBits::eVertex,
+			.module = shaderModule,
+			.pName = "vertMain"
+		};
+
+		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{
+			.stage = vk::ShaderStageFlagBits::eFragment,
+			.module = shaderModule,
+			.pName = "fragMain"
+		};
+
+		vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 	}
 
 	void mainLoop()

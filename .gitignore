@@ -48,3 +48,4 @@ out/**
 .vscode/
 .vs/
 .claude/
+memory/
