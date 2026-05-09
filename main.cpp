@@ -54,6 +54,8 @@ private:
 
 	std::vector<vk::raii::ImageView> swapChinImageViews;
 
+	vk::raii::PipelineLayout pipelineLayout = nullptr;
+
 	void initWindow()
 	{
 		glfwInit();
@@ -369,6 +371,7 @@ private:
 
 	void createGraphicsPipeline()
 	{
+		// Shader modules
 		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
 
 		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
@@ -384,6 +387,89 @@ private:
 		};
 
 		vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+		
+		// Vertex input (no vertex buffer for now)
+		vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+
+		// Input assembly
+		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
+			.topology = vk::PrimitiveTopology::eTriangleList,
+		};
+
+		// Dynamic States
+		std::vector<vk::DynamicState> dynamicStates = { vk::DynamicState::eViewport,
+														vk::DynamicState::eScissor, };
+		vk::PipelineDynamicStateCreateInfo dynamicState{
+			.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+			.pDynamicStates = dynamicStates.data(),
+		};
+
+		// Viewport & scissor
+
+		//vk::Viewport viewport{
+		//	0.0f, 0.0f,
+		//	static_cast<float>(swapchainExtent.width), static_cast<float>(swapchainExtent.height),
+		//	0.0f, 1.0f,
+		//};
+		//vk::Rect2D scissor{ vk::Offset2D{0,0}, swapchainExtent };
+
+		vk::PipelineViewportStateCreateInfo viewportState{
+			.viewportCount = 1,
+			//.pViewports = &viewport,
+			.scissorCount = 1,
+			//.pScissors = &scissor,
+		};
+
+		// Rasterizer
+		vk::PipelineRasterizationStateCreateInfo rasterizer{
+			.depthClampEnable = vk::False,
+			.rasterizerDiscardEnable = vk::False,
+			.polygonMode = vk::PolygonMode::eFill,
+			.cullMode = vk::CullModeFlagBits::eBack,
+			.frontFace = vk::FrontFace::eClockwise,
+			.depthBiasEnable = vk::False,
+			.lineWidth = 1.0f
+		};
+
+		// Multisampling (disabled for now)
+		vk::PipelineMultisampleStateCreateInfo multisampling{
+			.rasterizationSamples = vk::SampleCountFlagBits::e1,
+			.sampleShadingEnable = vk::False,
+		};
+
+		// Color blending
+		// vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+		// 	.blendEnable = vk::False,
+		// };
+
+		vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+			.blendEnable = vk::True,
+			.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+			.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+			.colorBlendOp = vk::BlendOp::eAdd,
+			.srcAlphaBlendFactor = vk::BlendFactor::eOne,
+			.dstAlphaBlendFactor = vk::BlendFactor::eZero,
+			.alphaBlendOp = vk::BlendOp::eAdd,
+			.colorWriteMask = vk::ColorComponentFlagBits::eR |
+							  vk::ColorComponentFlagBits::eG |
+							  vk::ColorComponentFlagBits::eB |
+							  vk::ColorComponentFlagBits::eA,
+		};
+
+		vk::PipelineColorBlendStateCreateInfo colorBlending{
+			.logicOpEnable = vk::False,
+			.logicOp = vk::LogicOp::eCopy,
+			.attachmentCount = 1,
+			.pAttachments = &colorBlendAttachment,
+		};
+
+		// Pipeline layout
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+			.setLayoutCount = 0,
+			.pushConstantRangeCount = 0
+		};
+
+		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 	}
 
 	void mainLoop()
