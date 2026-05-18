@@ -55,6 +55,7 @@ private:
 	std::vector<vk::raii::ImageView> swapChinImageViews;
 
 	vk::raii::PipelineLayout pipelineLayout = nullptr;
+	vk::raii::Pipeline graphicsPipeline = nullptr;
 
 	void initWindow()
 	{
@@ -470,6 +471,38 @@ private:
 		};
 
 		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+
+		vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo{
+					.stageCount = 2,
+					.pStages = shaderStages,
+					.pVertexInputState = &vertexInputInfo,
+					.pInputAssemblyState = &inputAssembly,
+					.pViewportState = &viewportState,
+					.pRasterizationState = &rasterizer,
+					.pMultisampleState = &multisampling,
+					.pColorBlendState = &colorBlending,
+					.pDynamicState = &dynamicState,
+					.layout = pipelineLayout,
+					.renderPass = nullptr,
+		};
+
+		vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
+			.colorAttachmentCount = 1,
+			.pColorAttachmentFormats = &swapChainSurfaceFormat.format,
+		};
+
+		vk::StructureChain<vk::GraphicsPipelineCreateInfo, 
+						   vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain{ 
+			graphicsPipelineCreateInfo, 
+			pipelineRenderingCreateInfo,
+		};
+
+		graphicsPipeline = vk::raii::Pipeline(
+			device, 
+			nullptr, 
+			pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>()
+		);
+
 	}
 
 	void mainLoop()
