@@ -13,8 +13,8 @@ import vulkan;
 #include <cstdlib>
 #include <cassert>
 
-const uint32_t WIDTH  = 1200;
-const uint32_t HEIGHT = 800;
+const uint32_t WIDTH  = 800;
+const uint32_t HEIGHT = 600;
 
 const std::vector<char const*> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
@@ -61,6 +61,10 @@ private:
 	vk::raii::CommandPool commandPool = nullptr;
 	vk::raii::CommandBuffer commandBuffer = nullptr;
 
+	vk::raii::Semaphore presentCompleteSemaphore = nullptr;
+	vk::raii::Semaphore renderFinishedSemaphore = nullptr;
+	vk::raii::Fence drawFence = nullptr;
+
 
 	void initWindow()
 	{
@@ -83,6 +87,7 @@ private:
 		createGraphicsPipeline();
 		createCommandPool();
 		createCommandBuffer();
+		createSyncObjects();
 	}
 
 	// Instance
@@ -604,7 +609,7 @@ private:
 
 			commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f,
 													  static_cast<float>(swapchainExtent.width),
-													  static_cast<float>(swapchainExtent.width),
+													  static_cast<float>(swapchainExtent.height),
 													  0.0f, 1.0f));
 			commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent));
 
@@ -623,12 +628,57 @@ private:
 		commandBuffer.end();
 	}
 
+	void createSyncObjects()
+	{
+		presentCompleteSemaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+		renderFinishedSemaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+		drawFence = vk::raii::Fence(device, { .flags = vk::FenceCreateFlagBits::eSignaled });
+	}
+
+	void drawFrame()
+	{
+		auto fenceResult = device.waitForFences(*drawFence, vk::True, UINT64_MAX);
+		if (fenceResult != vk::Result::eSuccess) {
+			throw std::runtime_error("failed to wait for fence!");
+		}
+		device.resetFences(*drawFence);
+
+		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphore, nullptr);
+		recordCommandBuffer(imageIndex);
+		
+		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+		const vk::SubmitInfo submitInfo{
+			.waitSemaphoreCount = 1,
+			.pWaitSemaphores = &*presentCompleteSemaphore,
+			.pWaitDstStageMask = &waitDestinationStageMask,
+			.commandBufferCount = 1,
+			.pCommandBuffers = &*commandBuffer,
+			.signalSemaphoreCount = 1,
+			.pSignalSemaphores = &*renderFinishedSemaphore,
+		};
+
+		graphicsQueue.submit(submitInfo, *drawFence);
+
+		const vk::PresentInfoKHR presentInfoKHR{
+			.waitSemaphoreCount = 1,
+			.pWaitSemaphores = &*renderFinishedSemaphore,
+			.swapchainCount = 1,
+			.pSwapchains = &*swapChain,
+			.pImageIndices = &imageIndex
+		};
+
+		result = graphicsQueue.presentKHR(presentInfoKHR);
+	}
+
 	void mainLoop()
 	{
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
+			drawFrame();
 		}
+
+		device.waitIdle();
 	}
 
 	void cleanup()
