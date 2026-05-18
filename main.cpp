@@ -44,6 +44,7 @@ private:
 	vk::raii::Instance instance = nullptr;
 	vk::raii::PhysicalDevice physicalDevice = nullptr;
 	vk::raii::Device device = nullptr;
+	uint32_t queueIndex = ~0;
 	vk::raii::Queue graphicsQueue = nullptr;
 	vk::raii::SurfaceKHR surface = nullptr;
 
@@ -56,6 +57,10 @@ private:
 
 	vk::raii::PipelineLayout pipelineLayout = nullptr;
 	vk::raii::Pipeline graphicsPipeline = nullptr;
+
+	vk::raii::CommandPool commandPool = nullptr;
+	vk::raii::CommandBuffer commandBuffer = nullptr;
+
 
 	void initWindow()
 	{
@@ -76,6 +81,8 @@ private:
 		createSwapChain();
 		createImageViews();
 		createGraphicsPipeline();
+		createCommandPool();
+		createCommandBuffer();
 	}
 
 	// Instance
@@ -207,7 +214,6 @@ private:
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
 		// get the first index into queueFamilyProperties which supports both graphics and present
-		uint32_t queueIndex = ~0;
 		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); ++qfpIndex) {
 			if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
 				physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
@@ -372,7 +378,7 @@ private:
 
 	void createGraphicsPipeline()
 	{
-		// Shader modules
+		// 1. Shader modules
 		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
 
 		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
@@ -397,6 +403,7 @@ private:
 			.topology = vk::PrimitiveTopology::eTriangleList,
 		};
 
+		// 2. Fixed functions
 		// Dynamic States
 		std::vector<vk::DynamicState> dynamicStates = { vk::DynamicState::eViewport,
 														vk::DynamicState::eScissor, };
@@ -464,7 +471,7 @@ private:
 			.pAttachments = &colorBlendAttachment,
 		};
 
-		// Pipeline layout
+		// 3. Pipeline layout
 		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
 			.setLayoutCount = 0,
 			.pushConstantRangeCount = 0
@@ -472,6 +479,7 @@ private:
 
 		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
+		// 4. Put all together and create a graphics pipeline
 		vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo{
 					.stageCount = 2,
 					.pStages = shaderStages,
@@ -486,6 +494,7 @@ private:
 					.renderPass = nullptr,
 		};
 
+		// +) Dynamic rendering
 		vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
 			.colorAttachmentCount = 1,
 			.pColorAttachmentFormats = &swapChainSurfaceFormat.format,
@@ -503,6 +512,115 @@ private:
 			pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>()
 		);
 
+	}
+
+	// Command buffers
+	void createCommandPool()
+	{
+		vk::CommandPoolCreateInfo poolInfo{
+			.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+			.queueFamilyIndex = queueIndex,
+		};
+
+		commandPool = vk::raii::CommandPool(device, poolInfo);
+	}
+
+	void createCommandBuffer()
+	{
+		vk::CommandBufferAllocateInfo allocInfo{
+			.commandPool = commandPool,
+			.level = vk::CommandBufferLevel::ePrimary,
+			.commandBufferCount = 1,
+		};
+
+		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());
+	}
+
+	void transition_image_layout(
+		uint32_t                imageIndex,
+		vk::ImageLayout         old_layout,
+		vk::ImageLayout         new_layout,
+		vk::AccessFlags2        src_access_mask,
+		vk::AccessFlags2        dst_access_mask,
+		vk::PipelineStageFlags2 src_stage_mask,
+		vk::PipelineStageFlags2 dst_stage_mask)
+	{
+		vk::ImageMemoryBarrier2 barrier = {
+			.srcStageMask = src_stage_mask,
+			.srcAccessMask = src_access_mask,
+			.dstStageMask = dst_stage_mask,
+			.dstAccessMask = dst_access_mask,
+			.oldLayout = old_layout,
+			.newLayout = new_layout,
+			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.image = swapChainImages[imageIndex],
+			.subresourceRange = {
+				   .aspectMask = vk::ImageAspectFlagBits::eColor,
+				   .baseMipLevel = 0,
+				   .levelCount = 1,
+				   .baseArrayLayer = 0,
+				   .layerCount = 1} };
+
+		vk::DependencyInfo dependency_info = {
+			.dependencyFlags = {},
+			.imageMemoryBarrierCount = 1,
+			.pImageMemoryBarriers = &barrier };
+
+		commandBuffer.pipelineBarrier2(dependency_info);
+	}
+
+	void recordCommandBuffer(uint32_t imageIndex)
+	{
+		commandBuffer.begin({});
+
+		transition_image_layout(imageIndex,
+			vk::ImageLayout::eUndefined,
+			vk::ImageLayout::eColorAttachmentOptimal,
+			{},
+			vk::AccessFlagBits2::eColorAttachmentWrite,
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+
+		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+		vk::RenderingAttachmentInfo attachmentInfo = {
+			.imageView = swapChinImageViews[imageIndex],
+			.imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+			.loadOp = vk::AttachmentLoadOp::eClear,
+			.storeOp = vk::AttachmentStoreOp::eStore,
+			.clearValue = clearColor,
+		};
+
+		vk::RenderingInfo renderingInfo = {
+			.renderArea = {.offset = {0,0}, .extent = swapchainExtent},
+			.layerCount = 1,
+			.colorAttachmentCount = 1,
+			.pColorAttachments = &attachmentInfo
+		};
+
+		commandBuffer.beginRendering(renderingInfo);
+		{
+			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
+
+			commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f,
+													  static_cast<float>(swapchainExtent.width),
+													  static_cast<float>(swapchainExtent.width),
+													  0.0f, 1.0f));
+			commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent));
+
+			commandBuffer.draw(3, 1, 0, 0);
+		}
+		commandBuffer.endRendering();
+
+		transition_image_layout(imageIndex,
+			vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ImageLayout::ePresentSrcKHR,
+			vk::AccessFlagBits2::eColorAttachmentWrite,
+			{},
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			vk::PipelineStageFlagBits2::eBottomOfPipe);
+
+		commandBuffer.end();
 	}
 
 	void mainLoop()
