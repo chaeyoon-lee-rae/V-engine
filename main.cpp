@@ -53,7 +53,7 @@ private:
 	vk::SurfaceFormatKHR swapChainSurfaceFormat;
 	vk::Extent2D swapchainExtent;
 
-	std::vector<vk::raii::ImageView> swapChinImageViews;
+	std::vector<vk::raii::ImageView> swapChainImageViews;
 
 	vk::raii::PipelineLayout pipelineLayout = nullptr;
 	vk::raii::Pipeline graphicsPipeline = nullptr;
@@ -62,7 +62,7 @@ private:
 	vk::raii::CommandBuffer commandBuffer = nullptr;
 
 	vk::raii::Semaphore presentCompleteSemaphore = nullptr;
-	vk::raii::Semaphore renderFinishedSemaphore = nullptr;
+	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
 	vk::raii::Fence drawFence = nullptr;
 
 
@@ -189,6 +189,7 @@ private:
 															 vk::PhysicalDeviceVulkan11Features>();
 		bool supportsRequiredFeatures = 
 			features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+			features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
 			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
 			features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters;
 
@@ -236,7 +237,7 @@ private:
 			vk::PhysicalDeviceVulkan11Features>
 			featureChain = {
 				{},
-				{.dynamicRendering = true },
+				{.synchronization2 = true, .dynamicRendering = true},
 				{.extendedDynamicState = true },
 				{.shaderDrawParameters = true }, 
 		};	// now vulkan automatically connects pNext
@@ -338,7 +339,7 @@ private:
 	// Image views
 	void createImageViews()
 	{
-		assert(swapChinImageViews.empty());
+		assert(swapChainImageViews.empty());
 
 		vk::ImageViewCreateInfo imageViewCreateInfo{
 			.viewType = vk::ImageViewType::e2D,
@@ -348,7 +349,7 @@ private:
 
 		for (auto& image : swapChainImages) {
 			imageViewCreateInfo.image = image;
-			swapChinImageViews.emplace_back(device, imageViewCreateInfo);
+			swapChainImageViews.emplace_back(device, imageViewCreateInfo);
 		}
 	}
 
@@ -589,7 +590,7 @@ private:
 
 		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
 		vk::RenderingAttachmentInfo attachmentInfo = {
-			.imageView = swapChinImageViews[imageIndex],
+			.imageView = swapChainImageViews[imageIndex],
 			.imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
 			.loadOp = vk::AttachmentLoadOp::eClear,
 			.storeOp = vk::AttachmentStoreOp::eStore,
@@ -631,7 +632,8 @@ private:
 	void createSyncObjects()
 	{
 		presentCompleteSemaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
-		renderFinishedSemaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());
+		for (size_t i = 0; i < swapChainImages.size(); ++i)
+			renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
 		drawFence = vk::raii::Fence(device, { .flags = vk::FenceCreateFlagBits::eSignaled });
 	}
 
@@ -654,14 +656,14 @@ private:
 			.commandBufferCount = 1,
 			.pCommandBuffers = &*commandBuffer,
 			.signalSemaphoreCount = 1,
-			.pSignalSemaphores = &*renderFinishedSemaphore,
+			.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex],
 		};
 
 		graphicsQueue.submit(submitInfo, *drawFence);
 
 		const vk::PresentInfoKHR presentInfoKHR{
 			.waitSemaphoreCount = 1,
-			.pWaitSemaphores = &*renderFinishedSemaphore,
+			.pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
 			.swapchainCount = 1,
 			.pSwapchains = &*swapChain,
 			.pImageIndices = &imageIndex
