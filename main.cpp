@@ -64,7 +64,9 @@ private:
 	vk::raii::Pipeline graphicsPipeline = nullptr;
 
 	vk::raii::Buffer vertexBuffer = nullptr;
-	vk::raii::DeviceMemory vetexBufferMemory = nullptr;
+	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+	vk::raii::Buffer indexBuffer = nullptr;
+	vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
 	vk::raii::CommandPool commandPool = nullptr;
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
@@ -90,9 +92,14 @@ private:
 	};
 
 	const std::vector<Vertex> vertices = {
-		{{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-		{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-		{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+		{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+		{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+	};
+
+	const std::vector<uint16_t> indices = {
+		0, 1, 2, 2, 3, 0
 	};
 
 	void initWindow()
@@ -114,8 +121,9 @@ private:
 		createSwapChain();
 		createImageViews();
 		createGraphicsPipeline();
-		createVertexBuffer();
 		createCommandPool();
+		createVertexBuffer();
+		createIndexBuffer();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -628,11 +636,29 @@ private:
 		memcpy(dataStaging, vertices.data(), bufferSize);
 		stagingBufferMemory.unmapMemory();
 
-		std::tie(vertexBuffer, vetexBufferMemory) = createBuffer(bufferSize,
+		std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(bufferSize,
 			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
 			vk::MemoryPropertyFlagBits::eDeviceLocal);
 
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+	}
+
+	void createIndexBuffer()
+	{
+		vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+		auto [stagingBuffer, stagingBufferMemory] = createBuffer(bufferSize,
+			vk::BufferUsageFlagBits::eTransferSrc,
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+		void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+		memcpy(dataStaging, indices.data(), bufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		std::tie(indexBuffer, indexBufferMemory) = createBuffer(bufferSize,
+			vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+			vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 	}
 
 	// Command buffers
@@ -724,6 +750,7 @@ private:
 			commandBuffers[frameIndex].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
 
 			commandBuffers[frameIndex].bindVertexBuffers(0, *vertexBuffer, { 0 });
+			commandBuffers[frameIndex].bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
 
 			commandBuffers[frameIndex].setViewport(0, vk::Viewport(0.0f, 0.0f,
 													  static_cast<float>(swapchainExtent.width),
@@ -731,7 +758,7 @@ private:
 													  0.0f, 1.0f));
 			commandBuffers[frameIndex].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent));
 
-			commandBuffers[frameIndex].draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+			commandBuffers[frameIndex].drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 		}
 		commandBuffers[frameIndex].endRendering();
 
