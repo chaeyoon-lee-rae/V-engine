@@ -144,6 +144,7 @@ private:
 		createIndexBuffer();
 		createUniformBuffers();
 		createDescriptorPool();
+		createDescriptorSets();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -562,7 +563,7 @@ private:
 
 		// 3. Pipeline layout
 		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-			.setLayoutCount = 0,
+			.setLayoutCount = 1,
 			.pSetLayouts = &*descriptorSetLayout,
 			.pushConstantRangeCount = 0
 		};
@@ -897,7 +898,7 @@ private:
 		commandBuffers[frameIndex].end();
 	}
 
-	void updateUniformBuffer(uint32_t currentImage)
+	void updateUniformBuffer(uint32_t currentFrame)
 	{
 		static auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -912,7 +913,7 @@ private:
 			0.1f, 10.0f);
 		ubo.proj[1][1] *= -1;
 
-		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+		memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
 	}
 
 	void drawFrame()
@@ -926,7 +927,7 @@ private:
 		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
 		recordCommandBuffer(imageIndex);
 		
-		updateUniformBuffer(imageIndex);
+		updateUniformBuffer(frameIndex);
 
 		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
 		const vk::SubmitInfo submitInfo{
