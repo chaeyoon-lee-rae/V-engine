@@ -70,6 +70,8 @@ private:
 
 	vk::raii::Image textureImage = nullptr;
 	vk::raii::DeviceMemory textureImageMemory = nullptr;
+	vk::raii::ImageView textureImageView = nullptr;
+	vk::raii::Sampler textureSampler = nullptr;
 
 	vk::raii::Buffer vertexBuffer = nullptr;
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
@@ -92,7 +94,7 @@ private:
 
 	struct Vertex {
 		glm::vec2 pos;
-		glm::vec3 color;
+		glm::vec2 texCoord;
 
 		static vk::VertexInputBindingDescription getBindingDescription() {
 			return { .binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex };
@@ -101,16 +103,16 @@ private:
 		static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
 			return { 
 				{{.location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, pos)},
-				 {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)},}
+				 {.location = 1, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, texCoord)},}
 			};
 		}
 	};
 
 	const std::vector<Vertex> vertices = {
-		{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-		{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-		{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-		{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+		{{-0.5f, -0.5f}, {1.0f, 0.0f}}, // 좌상단
+		{{0.5f, -0.5f},  {0.0f, 0.0f}}, // 우상단
+		{{0.5f, 0.5f},   {0.0f, 1.0f}}, // 우하단
+		{{-0.5f, 0.5f},  {1.0f, 1.0f}}  // 좌하단
 	};
 
 	const std::vector<uint16_t> indices = {
@@ -146,6 +148,8 @@ private:
 		createGraphicsPipeline();
 		createCommandPool();
 		createTextureImage();
+		createTextureImageView();
+		createTextureSampler();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
@@ -253,6 +257,7 @@ private:
 															 vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
 															 vk::PhysicalDeviceVulkan11Features>();
 		bool supportsRequiredFeatures = 
+			features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
 			features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
 			features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
 			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
@@ -301,7 +306,7 @@ private:
 			vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
 			vk::PhysicalDeviceVulkan11Features>
 			featureChain = {
-				{},
+				{.features = {.samplerAnisotropy = true}},
 				{.synchronization2 = true, .dynamicRendering = true},
 				{.extendedDynamicState = true },
 				{.shaderDrawParameters = true }, 
@@ -402,19 +407,31 @@ private:
 	}
 
 	// Image views
+	vk::raii::ImageView createImageView(vk::Image const &image, vk::Format format)
+	{
+		vk::ImageViewCreateInfo viewInfo{
+			.image = image,
+			.viewType = vk::ImageViewType::e2D,
+			.format = format,
+			.subresourceRange = {
+				.aspectMask = vk::ImageAspectFlagBits::eColor,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			}
+		};
+
+		return vk::raii::ImageView(device, viewInfo);
+	}
+
 	void createImageViews()
 	{
 		assert(swapChainImageViews.empty());
 
-		vk::ImageViewCreateInfo imageViewCreateInfo{
-			.viewType = vk::ImageViewType::e2D,
-			.format = swapChainSurfaceFormat.format,
-			.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-		};
-
+		swapChainImageViews.reserve(swapChainImages.size());
 		for (auto& image : swapChainImages) {
-			imageViewCreateInfo.image = image;
-			swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+			swapChainImageViews.emplace_back(createImageView(image, swapChainSurfaceFormat.format));
 		}
 	}
 
@@ -449,16 +466,24 @@ private:
 
 	void createDescriptorSetLayout()
 	{
-		vk::DescriptorSetLayoutBinding uboLayoutBinding{
-			.binding = 0,
-			.descriptorType = vk::DescriptorType::eUniformBuffer,
-			.descriptorCount = 1,
-			.stageFlags = vk::ShaderStageFlagBits::eVertex,
-		};
+		std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
+			{
+				.binding = 0,
+				.descriptorType = vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eVertex,
+			},
+			{
+				.binding = 1,
+				.descriptorType = vk::DescriptorType::eCombinedImageSampler,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eFragment
+			}
+		}};
 
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{
-			.bindingCount = 1,
-			.pBindings = &uboLayoutBinding,
+			.bindingCount = static_cast<uint32_t>(bindings.size()),
+			.pBindings = bindings.data(),
 		};
 
 		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
@@ -653,7 +678,7 @@ private:
 	{
 		vk::ImageCreateInfo imageInfo{
 			.imageType = vk::ImageType::e2D,
-			.format = swapChainSurfaceFormat.format,
+			.format = format,
 			.extent = {width, height, 1},
 			.mipLevels = 1,
 			.arrayLayers = 1,
@@ -748,7 +773,7 @@ private:
 	void createTextureImage()
 	{
 		int texWidth, texHeight, texChannels;
-		stbi_uc* pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load("textures/texture1.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		vk::DeviceSize imageSize = texWidth * texHeight * 4;
 		if (!pixels)
 			throw std::runtime_error("failed to load texture image!");
@@ -776,6 +801,33 @@ private:
 		copyBufferToImage(commandBuffer, stagingBuffer, textureImage, texWidth, texHeight);
 		transitionImageLayout(commandBuffer, textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 		endSingleTimeCommands(std::move(commandBuffer));
+	}
+
+	void createTextureImageView()
+	{
+		textureImageView = createImageView(*textureImage, vk::Format::eR8G8B8A8Srgb);
+	}
+
+	void createTextureSampler()
+	{
+		vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
+
+		vk::SamplerCreateInfo samplerInfo{
+			.magFilter = vk::Filter::eLinear,
+			.minFilter = vk::Filter::eLinear,
+			.mipmapMode = vk::SamplerMipmapMode::eLinear,
+			.addressModeU = vk::SamplerAddressMode::eRepeat,
+			.addressModeV = vk::SamplerAddressMode::eRepeat,
+			.addressModeW = vk::SamplerAddressMode::eRepeat,
+			.anisotropyEnable = vk::True,
+			.maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+			.compareEnable = vk::False,
+			.compareOp = vk::CompareOp::eAlways,
+			.borderColor = vk::BorderColor::eIntOpaqueBlack,
+			.unnormalizedCoordinates = vk::False,
+		};
+
+		textureSampler = vk::raii::Sampler(device, samplerInfo);
 	}
 
 	// Vertex buffer
@@ -878,16 +930,22 @@ private:
 
 	void createDescriptorPool()
 	{
-		vk::DescriptorPoolSize poolSize{
-			.type = vk::DescriptorType::eUniformBuffer,
-			.descriptorCount = MAX_FRAMES_IN_FLIGHT,
-		};
+		std::array< vk::DescriptorPoolSize, 2> poolSize{{
+			{
+				.type = vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = MAX_FRAMES_IN_FLIGHT,
+			},
+			{
+				.type = vk::DescriptorType::eCombinedImageSampler,
+				.descriptorCount = MAX_FRAMES_IN_FLIGHT,
+			},
+		}};
 
 		vk::DescriptorPoolCreateInfo poolInfo{
 			.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
 			.maxSets = MAX_FRAMES_IN_FLIGHT,
-			.poolSizeCount = 1,
-			.pPoolSizes = &poolSize,
+			.poolSizeCount = static_cast<uint32_t>(poolSize.size()),
+			.pPoolSizes = poolSize.data(),
 		};
 
 		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);
@@ -912,14 +970,30 @@ private:
 				.range = sizeof(UniformBufferObject) // vk::WholeSize
 			};
 
-			vk::WriteDescriptorSet descriptorWrite{
-				.dstSet = descriptorSets[i],
-				.dstBinding = 0,
-				.dstArrayElement = 0,
-				.descriptorCount = 1,
-				.descriptorType = vk::DescriptorType::eUniformBuffer,
-				.pBufferInfo = &bufferInfo,
+			vk::DescriptorImageInfo imageInfo{
+				.sampler = textureSampler,
+				.imageView = textureImageView,
+				.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
 			};
+
+			std::array<vk::WriteDescriptorSet, 2> descriptorWrite{{
+				{
+					.dstSet = descriptorSets[i],
+					.dstBinding = 0,
+					.dstArrayElement = 0,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eUniformBuffer,
+					.pBufferInfo = &bufferInfo,
+				},
+				{
+					.dstSet = descriptorSets[i],
+					.dstBinding = 1,
+					.dstArrayElement = 0,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eCombinedImageSampler,
+					.pImageInfo = &imageInfo,
+				},
+			}};
 
 			device.updateDescriptorSets(descriptorWrite, {});
 		}
@@ -1066,8 +1140,8 @@ private:
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
 		UniformBufferObject ubo{};
-		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.model = glm::rotate(glm::mat4(1.0f), -time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.view = glm::lookAt(glm::vec3(1.0f, 1.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		ubo.proj = glm::perspective(glm::radians(45.0f),
 									static_cast<float>(swapchainExtent.width) / static_cast<float>(swapchainExtent.height),
 									0.1f, 10.0f);
