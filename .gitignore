@@ -49,3 +49,7 @@ out/**
 .vs/
 .claude/
 memory/
+textures/
+
+# Compiled shaders (output of slangc)
+shaders/*.spv

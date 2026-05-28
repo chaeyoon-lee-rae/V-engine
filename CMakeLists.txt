@@ -94,19 +94,19 @@ target_compile_definitions(${TEMPLATE_NAME} PRIVATE "VULKAN_HPP_HANDLE_ERROR_OUT
 
 if(WIN32)
   if(${CMAKE_GENERATOR} MATCHES "Visual Studio.*")
-    set_target_properties(${TEMPLATE_NAME} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY ${TEMPLATE_DIR})
+    set_target_properties(${TEMPLATE_NAME} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   endif()
 endif()
 
 # Slang shader
 set (SHADER_TARGET ${TEMPLATE_NAME}Shader)
-set (SHADERS_DIR ${TEMPLATE_DIR}/shaders)
+set (SHADERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shader.slang")
 set (ENTRY_POINTS -entry vertMain -entry fragMain)
 add_custom_command(
   OUTPUT  ${SHADERS_DIR}/slang.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
-  COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o ${TEMPLATE_DIR}/shaders/slang.spv
+  COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o ${SHADERS_DIR}/slang.spv
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   DEPENDS ${SHADER_SOURCES}
   COMMENT "Compiling Slang Shaders"
