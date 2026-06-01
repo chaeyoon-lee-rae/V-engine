@@ -3,8 +3,13 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/hash.hpp>
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+#include <unordered_map>
 #include <chrono>
 #include <cstdlib>
 #include <cassert>
@@ -19,8 +24,11 @@
 import vulkan;
 #endif
 
-const uint32_t WIDTH  = 800;
-const uint32_t HEIGHT = 600;
+constexpr uint32_t WIDTH  = 800;
+constexpr uint32_t HEIGHT = 600;
+
+const std::string MODEL_PATH = "assets/models/viking_room.obj";
+const std::string TEXTURE_PATH = "assets/textures/viking_room.png";
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -33,6 +41,45 @@ constexpr bool enableValidationLayers = false;
 #else
 constexpr bool enableValidationLayers = true;
 #endif
+
+struct Vertex {
+	glm::vec3 pos;
+	glm::vec3 color;
+	glm::vec2 texCoord;
+
+	static vk::VertexInputBindingDescription getBindingDescription() {
+		return { .binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex };
+	}
+
+	static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
+		return { {
+			{.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, pos)},
+			{.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)},
+			{.location = 2, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, texCoord)},
+		} };
+	}
+
+	bool operator==(const Vertex& other) const {
+		return pos == other.pos && color == other.color && texCoord == other.texCoord;
+	}
+};
+
+namespace std
+{
+	template<> struct hash<Vertex>
+	{
+		size_t operator()(Vertex const& vertex) const
+		{
+			return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+		}
+	};
+}
+
+struct UniformBufferObject {
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 proj;
+};
 
 class HelloTriangleApplication
 {
@@ -78,6 +125,9 @@ private:
 	vk::raii::ImageView textureImageView = nullptr;
 	vk::raii::Sampler textureSampler = nullptr;
 
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
+	std::unordered_map<Vertex, uint32_t> uniqueVertices{};
 	vk::raii::Buffer vertexBuffer = nullptr;
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
 	vk::raii::Buffer indexBuffer = nullptr;
@@ -96,47 +146,6 @@ private:
 	std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
 	std::vector <vk::raii::Fence> inFlightFences;
-
-	struct Vertex {
-		glm::vec3 pos;
-		glm::vec3 color;
-		glm::vec2 texCoord;
-
-		static vk::VertexInputBindingDescription getBindingDescription() {
-			return { .binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex };
-		}
-
-		static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
-			return { {
-				{.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, pos)},
-				{.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)},
-				{.location = 2, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, texCoord)},
-			}};
-		}
-	};
-
-	const std::vector<Vertex> vertices = {
-		{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-		{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-		{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-		{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-
-		{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-		{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-		{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-		{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-	};
-
-	const std::vector<uint16_t> indices = {
-		0, 1, 2, 2, 3, 0,
-		4, 5, 6, 6, 7, 4,
-	};
-
-	struct UniformBufferObject {
-		glm::mat4 model;
-		glm::mat4 view;
-		glm::mat4 proj;
-	};
 	
 
 	void initWindow()
@@ -164,6 +173,7 @@ private:
 		createTextureImage();
 		createTextureImageView();
 		createTextureSampler();
+		loadModel();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
@@ -844,7 +854,7 @@ private:
 	void createTextureImage()
 	{
 		int texWidth, texHeight, texChannels;
-		stbi_uc* pixels = stbi_load("textures/texture1.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		vk::DeviceSize imageSize = texWidth * texHeight * 4;
 		if (!pixels)
 			throw std::runtime_error("failed to load texture image!");
@@ -899,6 +909,41 @@ private:
 		};
 
 		textureSampler = vk::raii::Sampler(device, samplerInfo);
+	}
+
+	void loadModel()
+	{
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string warn, err;
+
+		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+			throw std::runtime_error(warn + err);
+
+		for (const auto& shape : shapes) {
+			for (const auto& index : shape.mesh.indices) {
+				Vertex vertex{};
+
+				vertex.pos = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2],
+				};
+
+				vertex.texCoord = {
+					attrib.texcoords[2 * index.texcoord_index + 0],
+					1.0f - attrib.texcoords[2 * index.texcoord_index + 1],
+				};
+
+				vertex.color = { 1.0f, 1.0f, 1.0f };
+
+				auto [it, inserted] = uniqueVertices.insert({vertex, static_cast<uint32_t>(vertices.size())});
+				if (inserted)
+					vertices.push_back(vertex);
+				indices.push_back(it->second);
+			}
+		}
 	}
 
 	// Vertex buffer
@@ -1197,7 +1242,8 @@ private:
 			commandBuffers[frameIndex].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
 
 			commandBuffers[frameIndex].bindVertexBuffers(0, *vertexBuffer, { 0 });
-			commandBuffers[frameIndex].bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
+			commandBuffers[frameIndex].bindIndexBuffer(*indexBuffer, 0, 
+													   vk::IndexTypeValue<decltype(indices)::value_type>::value);
 
 			commandBuffers[frameIndex].setViewport(0, vk::Viewport(0.0f, 0.0f,
 													  static_cast<float>(swapchainExtent.width),
@@ -1234,7 +1280,7 @@ private:
 
 		UniformBufferObject ubo{};
 		ubo.model = glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
-		ubo.view = glm::lookAt(glm::vec3(1.0f, 1.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		ubo.proj = glm::perspective(glm::radians(45.0f),
 									static_cast<float>(swapchainExtent.width) / static_cast<float>(swapchainExtent.height),
 									0.1f, 10.0f);
