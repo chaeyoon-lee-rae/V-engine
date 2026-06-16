@@ -4,6 +4,13 @@ set (TEMPLATE_NAME "VulkanTutorial")
 
 project (${TEMPLATE_NAME})
 
+# 모든 타깃(vulkan/std 모듈 + exe)을 UTF-8로 컴파일.
+# - MSVC가 한글 주석을 CP949로 오독해 구문 에러 내는 것 방지
+# - 전역 적용이라 모듈 producer/consumer의 _UTF8 환경이 일치 → 모듈 불일치 경고 방지
+if(MSVC)
+  string(APPEND CMAKE_CXX_FLAGS " /utf-8")
+endif()
+
 # Add option to enable/disable C++ 20 module
 option(ENABLE_CPP20_MODULE "Enable C++ 20 module support for Vulkan" ON)
 
@@ -26,7 +33,7 @@ if(ENABLE_CPP20_MODULE)
   add_library(VulkanCppModule)
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
 
-  target_compile_definitions(VulkanCppModule PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1 VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING)
+  target_compile_definitions(VulkanCppModule PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1 VULKAN_HPP_NO_UNION_CONSTRUCTORS=1 VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING)
   target_include_directories(VulkanCppModule PUBLIC "${Vulkan_INCLUDE_DIR}")
   target_link_libraries(VulkanCppModule PUBLIC Vulkan::Vulkan)
 
@@ -67,7 +74,7 @@ else()
   add_library(Vulkan::cppm ALIAS VulkanCppModule)
   target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
   target_compile_definitions(VulkanCppModule
-    INTERFACE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+    INTERFACE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1 VULKAN_HPP_NO_UNION_CONSTRUCTORS=1
   )
 endif()
 

@@ -24,7 +24,7 @@
 #else
 import vulkan;
 #endif
-
+ 
 constexpr uint32_t WIDTH  = 800;
 constexpr uint32_t HEIGHT = 600;
 
@@ -43,6 +43,8 @@ constexpr bool enableValidationLayers = false;
 #else
 constexpr bool enableValidationLayers = true;
 #endif
+
+using Mat3x4 = std::array<std::array<float, 4>, 3>;
 
 struct Vertex {
 	glm::vec3 pos;
@@ -164,6 +166,15 @@ private:
 	vk::raii::Buffer indexBuffer = nullptr;
 	vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
+	vk::raii::Buffer blasBuffer = nullptr;
+	vk::raii::DeviceMemory blasBufferMemory = nullptr;
+	vk::raii::AccelerationStructureKHR blas = nullptr;
+	vk::DeviceAddress blasAddress;
+
+	vk::raii::Buffer tlasBuffer = nullptr;
+	vk::raii::DeviceMemory tlasBufferMemory = nullptr;
+	vk::raii::AccelerationStructureKHR tlas = nullptr;
+
 	std::vector<vk::raii::Buffer> shaderStorageBuffers;
 	std::vector<vk::raii::DeviceMemory> shaderStorageBuffersMemory;
 
@@ -219,6 +230,8 @@ private:
 		//loadModel();
 		//createVertexBuffer();
 		//createIndexBuffer();
+		createBLAS();
+		createTLAS();
 		createShaderStorageBuffers();
 		createUniformBuffers();
 		createDescriptorPool();
@@ -298,7 +311,13 @@ private:
 	}
 
 	// Physical device
-	std::vector<const char*> requiredDeviceExtension = { vk::KHRSwapchainExtensionName };
+	std::vector<const char*> requiredDeviceExtension = { 
+		vk::KHRSwapchainExtensionName,
+		//vk::KHRBufferDeviceAddressExtensionName, // 1.2부터 core라 확장 불필요
+		vk::KHRDeferredHostOperationsExtensionName,
+		vk::KHRAccelerationStructureExtensionName,
+		vk::KHRRayTracingPipelineExtensionName,
+	};
 
 	bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice)
 	{
@@ -316,23 +335,34 @@ private:
 
 		// Device extensions
 		auto availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
-		bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, [&availableDeviceExtensions](auto const& requiredDeviceExtension) {
-			return std::ranges::any_of(availableDeviceExtensions, [requiredDeviceExtension](auto const& availableDeviceExtension) {
-				return strcmp(availableDeviceExtension.extensionName, requiredDeviceExtension) == 0;
+		bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, 
+			[&availableDeviceExtensions](auto const& requiredDeviceExtension) {
+				return std::ranges::any_of(availableDeviceExtensions, 
+				[requiredDeviceExtension](auto const& availableDeviceExtension) {
+					return strcmp(availableDeviceExtension.extensionName, requiredDeviceExtension) == 0;
 				});
 			});
 
 		// Device features
-		auto features = physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2, 
-														     vk::PhysicalDeviceVulkan13Features, 
-															 vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
-															 vk::PhysicalDeviceVulkan11Features>();
-		bool supportsRequiredFeatures = 
+		auto features = physicalDevice.template getFeatures2<
+			vk::PhysicalDeviceFeatures2, 
+			vk::PhysicalDeviceVulkan11Features,
+			vk::PhysicalDeviceVulkan12Features,
+			vk::PhysicalDeviceVulkan13Features, 
+			vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+			vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+			vk::PhysicalDeviceRayTracingPipelineFeaturesKHR
+		>();
+
+		bool supportsRequiredFeatures =
 			features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
+			features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
+			features.template get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
 			features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
 			features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
 			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
-			features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters;
+			features.template get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure &&
+			features.template get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>().rayTracingPipeline;
 
 		return supportsVulkan1_3 && 
 			   supportsGraphics && 
@@ -347,7 +377,7 @@ private:
 
 		auto const devIter = std::ranges::find_if(physicalDevices, [&](auto const& physicalDevice) {
 			return isDeviceSuitable(physicalDevice);
-			});
+		});
 
 		if (devIter == physicalDevices.end()) {
 			throw std::runtime_error("failed to find a suitable GPU!");
@@ -377,15 +407,22 @@ private:
 			throw std::runtime_error("Could not find a queue for graphics, compute and present -> terminating");
 
 		// Feature structures (chained)
-		vk::StructureChain<vk::PhysicalDeviceFeatures2,
+		vk::StructureChain<
+			vk::PhysicalDeviceFeatures2,
+			vk::PhysicalDeviceVulkan11Features,
+			vk::PhysicalDeviceVulkan12Features,
 			vk::PhysicalDeviceVulkan13Features,
 			vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
-			vk::PhysicalDeviceVulkan11Features>
-			featureChain = {
-				{.features = {.samplerAnisotropy = true}},
-				{.synchronization2 = true, .dynamicRendering = true},
-				{.extendedDynamicState = true },
-				{.shaderDrawParameters = true }, 
+			vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+			vk::PhysicalDeviceRayTracingPipelineFeaturesKHR
+		> featureChain = {
+			{.features = {.samplerAnisotropy = true}},
+			{.shaderDrawParameters = true }, 
+			{.bufferDeviceAddress = true},
+			{.synchronization2 = true, .dynamicRendering = true},
+			{.extendedDynamicState = true },
+			{.accelerationStructure = true},
+			{.rayTracingPipeline = true},
 		};	// now vulkan automatically connects pNext
 
 		// Create a device
@@ -1178,7 +1215,9 @@ private:
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
 
-	std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties) 
+	std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(vk::DeviceSize size, 
+																	 vk::BufferUsageFlags usage, 
+																	 vk::MemoryPropertyFlags properties) 
 	{
 		vk::BufferCreateInfo bufferInfo{
 			.size = size,
@@ -1196,6 +1235,15 @@ private:
 				memRequirements.memoryTypeBits,
 				properties)
 		};
+
+		if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
+		{
+			vk::MemoryAllocateFlagsInfo flagsInfo{
+				.sType = vk::StructureType::eMemoryAllocateFlagsInfo,
+				.flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+			};
+			memoryAllocateInfo.pNext = &flagsInfo;
+		}
 
 		vk::raii::DeviceMemory bufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
 
@@ -1293,6 +1341,281 @@ private:
 			shaderStorageBuffers.emplace_back(std::move(shaderStorageBufferTemp));
 			shaderStorageBuffersMemory.emplace_back(std::move(shaderStorageBufferTempMemory));
 		}
+	}
+
+	// (RT) BLAS
+	void createBLAS()	// geometry들로 이루어짐 -> TLAS는 instance들로 이루어짐
+	{
+		// 일단 하드코딩으로 geometry 만들어줌
+		float vertices[][3] = { // 사각형
+			{ -1.0, -1.0f, 0.0f },
+			{  1.0, -1.0f, 0.0f },
+			{  1.0,  1.0f, 0.0f },
+			{ -1.0,  1.0f, 0.0f },
+		};
+		uint32_t indices[] = { 0, 1, 3, 1, 2, 3 };
+
+		vk::TransformMatrixKHR geoTransforms[] = {	// 사각형에 적용할 transform
+			{.matrix = Mat3x4{{	// 왼쪽으로 이동
+				{{ 1.0f, 0.0f, 0.0f, -2.0f }},
+				{{ 0.0f, 1.0f, 0.0f, 0.0f }},
+				{{ 0.0f, 0.0f, 1.0f, 0.0f }},
+			}}},
+			{.matrix = Mat3x4{{	// 오른쪽으로 이동
+				{{ 1.0f, 0.0f, 0.0f, 2.0f }},
+				{{ 0.0f, 1.0f, 0.0f, 0.0f }},
+				{{ 0.0f, 0.0f, 1.0f, 0.0f }},
+			}}},
+		};
+
+		// 편의성을 위해서 일단 host visible, host coherent로 만듦
+		auto [vertexBuffer, vertexBufferMem] = createBuffer(
+			sizeof(vertices),
+			vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::MemoryPropertyFlagBits::eHostVisible |
+			vk::MemoryPropertyFlagBits::eHostCoherent
+		);
+
+		auto [indexBuffer, indexBufferMem] = createBuffer(
+			sizeof(indices),
+			vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::MemoryPropertyFlagBits::eHostVisible |
+			vk::MemoryPropertyFlagBits::eHostCoherent
+		);
+
+		auto [geoTransformBuffer, geoTransformBufferMem] = createBuffer(
+			sizeof(geoTransforms),
+			vk::BufferUsageFlagBits::eShaderDeviceAddress |
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+			vk::MemoryPropertyFlagBits::eHostVisible |
+			vk::MemoryPropertyFlagBits::eHostCoherent
+		);
+
+		void* data = vertexBufferMem.mapMemory(0, sizeof(vertices));
+		memcpy(data, vertices, sizeof(vertices));
+		vertexBufferMem.unmapMemory();
+
+		data = indexBufferMem.mapMemory(0, sizeof(indices));
+		memcpy(data, indices, sizeof(indices));
+		indexBufferMem.unmapMemory();
+
+		data = geoTransformBufferMem.mapMemory(0, sizeof(geoTransforms));
+		memcpy(data, geoTransforms, sizeof(geoTransforms));
+		geoTransformBufferMem.unmapMemory();
+
+		vk::AccelerationStructureGeometryKHR geometry0{
+			//geometry type: triangles, aabbs -> intersection shader쓸 때, instances
+			.geometryType = vk::GeometryTypeKHR::eTriangles,
+			.geometry = {
+				.triangles = {
+					.vertexFormat = vk::Format::eR32G32B32Sfloat,
+					.vertexData = {.deviceAddress = device.getBufferAddress({.buffer = vertexBuffer})},	// getBufferAddress?
+					.vertexStride = sizeof(vertices[0]),
+					.maxVertex = sizeof(vertices) / sizeof(vertices[0]) - 1,
+					.indexType = vk::IndexType::eUint32,
+					.indexData = {.deviceAddress = device.getBufferAddress({.buffer = indexBuffer})},
+					.transformData = {.deviceAddress = device.getBufferAddress({.buffer = geoTransformBuffer})},
+				}
+			},
+			.flags = vk::GeometryFlagBitsKHR::eOpaque,
+		};
+
+		vk::AccelerationStructureGeometryKHR geometries[] = { geometry0, geometry0 };
+
+		uint32_t triangleCount0 = sizeof(indices) / (sizeof(indices[0]) * 3);
+		uint32_t triangleCounts[] = { triangleCount0, triangleCount0 };
+
+		// pre-build를 해줄 것임
+		// 원래 info 안에 많은 정보가 필요한데, pre-build할 때에는 아래 정보만 세팅하면 됨
+		vk::AccelerationStructureBuildGeometryInfoKHR buildBlasInfo{
+			.type = vk::AccelerationStructureTypeKHR::eBottomLevel,
+			.flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastBuild,
+			.geometryCount = sizeof(geometries) / sizeof(geometries[0]),
+			.pGeometries = geometries,
+		};
+
+		auto requiredSize = device.getAccelerationStructureBuildSizesKHR(
+			vk::AccelerationStructureBuildTypeKHR::eDevice,	// AS 빌드를 어디서 할 것인가?, DX에서는 무조건 GPU에서만 되는데, vulkan에서는 cpu에서도 가능함
+			buildBlasInfo,
+			triangleCounts);
+
+		std::tie(blasBuffer, blasBufferMemory) = createBuffer(
+			requiredSize.accelerationStructureSize,
+			vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eDeviceLocal	// GPU가 알아서함, memcpy 이런거 해주지 않음
+		);
+
+		auto [scratchBuffer, scratchBufferMem] = createBuffer(	// 추가적인 용량?
+			requiredSize.buildScratchSize,
+			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eDeviceLocal
+		);
+
+		// BLAS 핸들 만들기
+		{
+			vk::AccelerationStructureCreateInfoKHR asCreateInfo{
+				.buffer = blasBuffer,
+				.size = requiredSize.accelerationStructureSize,
+				.type = vk::AccelerationStructureTypeKHR::eBottomLevel,	// blas임을 알려줌
+			};
+
+			blas = device.createAccelerationStructureKHR(asCreateInfo); // std::move해줘야하나?
+			blasAddress = device.getAccelerationStructureAddressKHR({ .accelerationStructure = blas });
+		}
+
+		// prebuild에서 사이즈도 얻어오고 필요한 버퍼를 만들어둠
+		// 이제 준비과정이 끝났으니 실제로 빌드를 진행
+		{
+			vk::CommandBufferBeginInfo beginInfo{};
+			auto commandBuffer = beginSingleTimeCommands();	// GPU에서 수행되어야하니 commandbuffer 생성
+
+			commandBuffer.begin(beginInfo);
+			{
+				// 이제 buildBlasInfo에 실제 빌드에 들어가야할 데이터를 넣어준다
+				buildBlasInfo.dstAccelerationStructure = blas;
+				buildBlasInfo.scratchData.deviceAddress = device.getBufferAddress({ .buffer = scratchBuffer });
+				// buildinfo에 들어간 geometry count가 2개이다
+				// 각 geometry에 해당하는 rangeinfo를 넣어주어야함
+				vk::AccelerationStructureBuildRangeInfoKHR buildBlasRangeInfo[] = {
+					{
+						.primitiveCount = triangleCounts[0],
+						.transformOffset = 0,
+					},
+					{
+						.primitiveCount = triangleCounts[1],
+						.transformOffset = sizeof(geoTransforms[0]),
+					},
+				};
+
+				vk::AccelerationStructureBuildGeometryInfoKHR buildBlasInfos[] = { buildBlasInfo };
+				const vk::AccelerationStructureBuildRangeInfoKHR* buildBlasRangeInfos[] = { buildBlasRangeInfo };
+				// 여러개의 build acceleration Structures를 만들 수 있도록 해줌
+				commandBuffer.buildAccelerationStructuresKHR(buildBlasInfos, buildBlasRangeInfos);
+			}
+			commandBuffer.end();
+
+			vk::SubmitInfo submitInfo{
+				.commandBufferCount = 1,
+				.pCommandBuffers = &*commandBuffer,
+			};
+
+			graphicsQueue.submit(submitInfo, nullptr);
+			graphicsQueue.waitIdle();
+		}
+	}
+
+	// (RT) TLAS
+	void createTLAS()
+	{
+		// 이거는 instance마다 가지고 있는 transforms
+		vk::TransformMatrixKHR insTransforms[] = {
+			{.matrix = Mat3x4{{
+				{{1.0f, 0.0f, 0.0f, 0.0f}},
+				{{0.0f, 1.0f, 0.0f, 2.0f}},
+				{{0.0f, 0.0f, 1.0f, 0.0f}},
+			}}},
+			{.matrix = Mat3x4{{
+				{{1.0f, 0.0f, 0.0f,  0.0f}},
+				{{0.0f, 1.0f, 0.0f, -2.0f}},
+				{{0.0f, 0.0f, 1.0f,  0.0f}},
+			}}},
+		};
+
+		// Blas를 내포함, 참조하고 있음
+		vk::AccelerationStructureInstanceKHR instance0{
+			.mask = 0xFF,
+			.instanceShaderBindingTableRecordOffset = 0,
+			.flags = static_cast<VkGeometryInstanceFlagsKHR>(vk::GeometryInstanceFlagBitsKHR::eTriangleCullDisable),
+			.accelerationStructureReference = blasAddress,
+		};
+
+		// 첫번째 사각형 2개를 참조하는 instance는 위로 2칸 올리고 다른 isntance는 밑으로 2칸 내리는 것
+		vk::AccelerationStructureInstanceKHR instanceData[] = { instance0, instance0 };
+		instanceData[0].transform = insTransforms[0];
+		instanceData[1].transform = insTransforms[1];
+
+		// 마찬가지로 버퍼를 만들어준다 
+		auto [instanceBuffer, instanceBufferMem] = createBuffer(
+			sizeof(instanceData),
+			vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,// 위 BLAS에서는 vertex, index, geoTransform이 input이면 TLAS에서는 instance가 input buffer가 된다
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+		void* data = instanceBufferMem.mapMemory(0, sizeof(instanceData));
+		memcpy(data, instanceData, sizeof(instanceData));
+		instanceBufferMem.unmapMemory();
+
+		// 이제 TLAS 과정 시작
+		// BLAS랑 거의 비슷한 구조
+		vk::AccelerationStructureGeometryKHR instances{
+			.geometryType = vk::GeometryTypeKHR::eInstances,
+			.geometry = {	// geometry union이다, 
+				.instances = {	// 아까는 triangles에 값을 넣어줬는데 지금은 instances이다
+					.data = {.deviceAddress = device.getBufferAddress({.buffer = instanceBuffer})}
+				}
+			},
+			.flags = vk::GeometryFlagBitsKHR::eOpaque
+		};
+
+		const uint32_t instanceCount = sizeof(instanceData) / sizeof(instanceData[0]);	// 2
+
+		vk::AccelerationStructureBuildGeometryInfoKHR buildTlasInfo{
+			.type = vk::AccelerationStructureTypeKHR::eTopLevel,
+			.flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastBuild,
+			.geometryCount = 1,	// 여기서 BLAS geometry랑은 다르다, 헷갈리면 안됨, 여기서는 instance가 한개의 geometry이다. 그리고 vulkan 스펙에서 tlas는 geometry count는 1이어야한다
+			.pGeometries = &instances
+		};
+
+		// 마찬가지로 prebuild를 해서 필요한 공간을 계산
+		auto requiredSize = device.getAccelerationStructureBuildSizesKHR(
+			vk::AccelerationStructureBuildTypeKHR::eDevice, 
+			buildTlasInfo, instanceCount);
+
+		std::tie(tlasBuffer, tlasBufferMemory) = createBuffer(
+			requiredSize.accelerationStructureSize,
+			vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eDeviceLocal
+		);
+
+		auto [scratchBuffer, scratchBufferMem] = createBuffer(
+			requiredSize.buildScratchSize,
+			vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eDeviceLocal
+		);
+
+		// TLAS 핸들 만들기 
+		{
+			vk::AccelerationStructureCreateInfoKHR asCreateInfo{
+				.buffer = tlasBuffer,
+				.size = requiredSize.accelerationStructureSize,
+				.type = vk::AccelerationStructureTypeKHR::eTopLevel
+			};
+
+			tlas = device.createAccelerationStructureKHR(asCreateInfo);
+		}
+
+		{
+			auto commandBuffer = beginSingleTimeCommands();
+			commandBuffer.begin({});
+			{
+				buildTlasInfo.dstAccelerationStructure = tlas;
+				buildTlasInfo.scratchData.deviceAddress = device.getBufferAddress({ .buffer = scratchBuffer });
+
+				vk::AccelerationStructureBuildRangeInfoKHR buildTlasRangeInfo = { .primitiveCount = instanceCount };	// BLAS에서는 triangle의 개수였음
+				commandBuffer.buildAccelerationStructuresKHR(buildTlasInfo, &buildTlasRangeInfo);
+			}
+			commandBuffer.end();
+
+			vk::SubmitInfo submitInfo{
+				.commandBufferCount = 1,
+				.pCommandBuffers = &*commandBuffer,
+			};
+			graphicsQueue.submit(submitInfo, nullptr);
+			graphicsQueue.waitIdle();
+		}
+
+		// 지금까지 raytracing이 동작하는 scene을 만들어줌 -> BVH 구조를 만들어준것
 	}
 
 	// Descriptor sets
@@ -1523,7 +1846,7 @@ private:
 			vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
 			vk::ImageAspectFlagBits::eDepth);
 
-		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+		vk::ClearValue clearColor = { .color = {.float32 = {{ 0.0f, 0.0f, 0.0f, 1.0f }} } };
 		vk::RenderingAttachmentInfo attachmentInfo = {
 			.imageView = swapChainImageViews[imageIndex],
 			.imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -1532,7 +1855,7 @@ private:
 			.clearValue = clearColor,
 		};
 
-		vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+		vk::ClearValue clearDepth = { .depthStencil = {.depth = 1.0f, .stencil = 0 } };
 		vk::RenderingAttachmentInfo depthAttachmentInfo = {
 			.imageView = depthImageView,
 			.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
