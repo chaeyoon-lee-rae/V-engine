@@ -86,8 +86,13 @@ namespace std
 //	glm::mat4 proj;
 //};
 
+//struct UniformBufferObject {
+//	float deltaTime = 1.0f;
+//};
+
 struct UniformBufferObject {
-	float deltaTime = 1.0f;
+	float cameraPos[3];
+	float yFov_degree;
 };
 
 struct Particle {
@@ -235,9 +240,10 @@ private:
 		//createSwapchainImageViews();
 		createDescriptorSetLayout();
 		createComputeDescriptorSetLayout();
+		createRTDescriptorSetLayout();
 		//createGraphicsPipeline();
 		createComputePipeline();
-		// createRTPipeline();
+		createRTPipeline();
 		createCommandPool();
 		createDepthResources();
 		createTextureImage();
@@ -248,7 +254,7 @@ private:
 		//createIndexBuffer();
 		createBLAS();
 		createTLAS();
-		//createOutImage();
+		createOutImage();
 
 		createShaderStorageBuffers();
 		createUniformBuffers();
@@ -671,6 +677,37 @@ private:
 		computeDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
 	}
 
+	void createRTDescriptorSetLayout()
+	{
+		vk::DescriptorSetLayoutBinding bindings[] = {
+			{
+				.binding = 0, 
+				.descriptorType = vk::DescriptorType::eAccelerationStructureKHR, 
+				.descriptorCount = 1, 
+				.stageFlags = vk::ShaderStageFlagBits::eRaygenKHR
+			},
+			{
+				.binding = 1, 
+				.descriptorType = vk::DescriptorType::eStorageImage, 
+				.descriptorCount = 1, 
+				.stageFlags = vk::ShaderStageFlagBits::eRaygenKHR
+			},
+			{
+				.binding = 2,
+				.descriptorType = vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = 1,
+				.stageFlags = vk::ShaderStageFlagBits::eRaygenKHR
+			},
+		};
+
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{
+			.bindingCount = sizeof(bindings) / sizeof(bindings[0]),
+			.pBindings = bindings
+		};
+
+		rtDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
+	}
+
 	void createGraphicsPipeline()
 	{
 		// 1. Shader modules
@@ -862,6 +899,21 @@ private:
 		};
 
 		comptePipeline = vk::raii::Pipeline(device, nullptr, pipelineInfo);
+	}
+
+	// RT pipeline
+	void createRTPipeline()
+	{
+		// pipeline layout
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+			.setLayoutCount = 1,
+			.pSetLayouts = &*rtDescriptorSetLayout
+		};
+
+		rtPipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+
+
+		// to be continued...
 	}
 
 	vk::Format findSupportedFormat(
@@ -1683,16 +1735,31 @@ private:
 		//	},
 		//}};
 
-		std::array poolSize{
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT * 2)
+		//std::array poolSize{
+		//	vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+		//	vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT * 2)
+		//};
+
+		vk::DescriptorPoolSize poolSizes[] = {
+			{
+				.type = vk::DescriptorType::eAccelerationStructureKHR,
+				.descriptorCount = MAX_FRAMES_IN_FLIGHT,
+			},
+			{
+				.type = vk::DescriptorType::eStorageImage,
+				.descriptorCount = MAX_FRAMES_IN_FLIGHT,
+			},
+			{
+				.type = vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = MAX_FRAMES_IN_FLIGHT,
+			},
 		};
 
 		vk::DescriptorPoolCreateInfo poolInfo{
 			.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
 			.maxSets = MAX_FRAMES_IN_FLIGHT,
-			.poolSizeCount = static_cast<uint32_t>(poolSize.size()),
-			.pPoolSizes = poolSize.data(),
+			.poolSizeCount = sizeof(poolSizes) / sizeof(poolSizes[0]),
+			.pPoolSizes = poolSizes,
 		};
 
 		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);
@@ -1701,7 +1768,8 @@ private:
 	void createDescriptorSets()
 	{
 		//std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
-		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *computeDescriptorSetLayout);
+		//std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *computeDescriptorSetLayout);
+		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *rtDescriptorSetLayout);
 
 		vk::DescriptorSetAllocateInfo allocInfo{
 			.descriptorPool = descriptorPool,
@@ -1712,22 +1780,16 @@ private:
 		descriptorSets = device.allocateDescriptorSets(allocInfo);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-			vk::DescriptorBufferInfo bufferInfo{
-				.buffer = uniformBuffers[i],
-				.offset = 0,
-				.range = sizeof(UniformBufferObject) // vk::WholeSize
-			};
-
 			//vk::DescriptorImageInfo imageInfo{
 			//	.sampler = textureSampler,
 			//	.imageView = textureImageView,
 			//	.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
 			//};
 
-			vk::DescriptorBufferInfo storageBufferInfoLastFrame(
-				shaderStorageBuffers[(i + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT], 0, sizeof(Particle) * PARTICLE_COUNT);
-			vk::DescriptorBufferInfo storageBufferInfoCurrentFrame(
-				shaderStorageBuffers[i], 0, sizeof(Particle) * PARTICLE_COUNT);
+			//vk::DescriptorBufferInfo storageBufferInfoLastFrame(
+			//	shaderStorageBuffers[(i + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT], 0, sizeof(Particle) * PARTICLE_COUNT);
+			//vk::DescriptorBufferInfo storageBufferInfoCurrentFrame(
+			//	shaderStorageBuffers[i], 0, sizeof(Particle) * PARTICLE_COUNT);
 
 			//std::array<vk::WriteDescriptorSet, 2> descriptorWrite{{
 			//	{
@@ -1748,32 +1810,76 @@ private:
 			//	},
 			//}};
 
-			std::array descriptorWrite{
-				vk::WriteDescriptorSet{
+
+			// AS structure
+			vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{
+				.accelerationStructureCount = 1,
+				.pAccelerationStructures = &*tlas,
+			};
+
+			// Out image
+			vk::DescriptorImageInfo imageInfo{
+				.imageView = outImageView,
+				.imageLayout = vk::ImageLayout::eGeneral,
+			};
+
+			// Uniform buffer
+			vk::DescriptorBufferInfo bufferInfo{
+				.buffer = uniformBuffers[i],
+				.offset = 0,
+				.range = sizeof(UniformBufferObject) // vk::WholeSize
+			};
+
+			vk::WriteDescriptorSet descriptorWrite[] = {
+				{
+					.pNext = &accelInfo,
 					.dstSet = descriptorSets[i],
 					.dstBinding = 0,
-					.dstArrayElement = 0,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eAccelerationStructureKHR,
+				},
+				{
+					.dstSet = descriptorSets[i],
+					.dstBinding = 1,
+					.descriptorCount = 1,
+					.descriptorType = vk::DescriptorType::eStorageImage,
+					.pImageInfo = &imageInfo,
+				},
+				{
+					.dstSet = descriptorSets[i],
+					.dstBinding = 2,
 					.descriptorCount = 1,
 					.descriptorType = vk::DescriptorType::eUniformBuffer,
 					.pBufferInfo = &bufferInfo,
 				},
-				vk::WriteDescriptorSet{
-					.dstSet = descriptorSets[i],
-					.dstBinding = 1,
-					.dstArrayElement = 0,
-					.descriptorCount = 1,
-					.descriptorType = vk::DescriptorType::eStorageBuffer,
-					.pBufferInfo = &storageBufferInfoLastFrame,
-				},
-				vk::WriteDescriptorSet{
-					.dstSet = descriptorSets[i],
-					.dstBinding = 2,
-					.dstArrayElement = 0,
-					.descriptorCount = 1,
-					.descriptorType = vk::DescriptorType::eStorageBuffer,
-					.pBufferInfo = &storageBufferInfoCurrentFrame,
-				},
 			};
+
+			//std::array descriptorWrite{
+			//	vk::WriteDescriptorSet{
+			//		.dstSet = descriptorSets[i],
+			//		.dstBinding = 0,
+			//		.dstArrayElement = 0,
+			//		.descriptorCount = 1,
+			//		.descriptorType = vk::DescriptorType::eUniformBuffer,
+			//		.pBufferInfo = &bufferInfo,
+			//	},
+			//	vk::WriteDescriptorSet{
+			//		.dstSet = descriptorSets[i],
+			//		.dstBinding = 1,
+			//		.dstArrayElement = 0,
+			//		.descriptorCount = 1,
+			//		.descriptorType = vk::DescriptorType::eStorageBuffer,
+			//		.pBufferInfo = &storageBufferInfoLastFrame,
+			//	},
+			//	vk::WriteDescriptorSet{
+			//		.dstSet = descriptorSets[i],
+			//		.dstBinding = 2,
+			//		.dstArrayElement = 0,
+			//		.descriptorCount = 1,
+			//		.descriptorType = vk::DescriptorType::eStorageBuffer,
+			//		.pBufferInfo = &storageBufferInfoCurrentFrame,
+			//	},
+			//};
 
 			device.updateDescriptorSets(descriptorWrite, {});
 		}
@@ -2034,9 +2140,12 @@ private:
 
 		//memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
 
-		UniformBufferObject ubo{};
-		ubo.deltaTime = static_cast<float>(lastFrameTime) * 2.0f;
+		//UniformBufferObject ubo{};
+		//ubo.deltaTime = static_cast<float>(lastFrameTime) * 2.0f;
 
+		//memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
+
+		UniformBufferObject ubo{ .cameraPos = {0,0,10}, .yFov_degree = 60 };
 		memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
 	}
 
