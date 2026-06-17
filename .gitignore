@@ -48,6 +48,7 @@ out/**
 .vscode/
 .vs/
 .claude/
+**CLAUDE**
 memory/
 assets/
 assets/**

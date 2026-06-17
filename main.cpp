@@ -33,6 +33,7 @@ const std::string TEXTURE_PATH = "assets/textures/viking_room.png";
 
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 constexpr int PARTICLE_COUNT = 8192;
+constexpr int SHADER_GROUP_HANDLE_SIZE = 32;
 
 const std::vector<char const*> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
@@ -148,6 +149,17 @@ private:
 	vk::raii::PipelineLayout computePipelineLayout = nullptr;
 	vk::raii::Pipeline comptePipeline = nullptr;
 
+	vk::raii::DescriptorSetLayout rtDescriptorSetLayout = nullptr;	// 1. topLevelAS, 2. outImage, 3. Uniform(Camera)
+	vk::raii::PipelineLayout rtPipelineLayout = nullptr;
+	vk::raii::Pipeline rtPipeline = nullptr;
+
+	// Raytracing에서는 descriptorSetLayout말고 접근할 수 있는 특별한 문법이 있다 -> shader binding table
+	vk::raii::Buffer sbtBuffer = nullptr;
+	vk::raii::DeviceMemory sbtBufferMemory = nullptr;
+	vk::StridedDeviceAddressRangeKHR rgenSbt{};
+	vk::StridedDeviceAddressRangeKHR missSbt{};
+	vk::StridedDeviceAddressRangeKHR hitSbt{};
+
 	vk::raii::Image depthImage = nullptr;
 	vk::raii::DeviceMemory depthImageMemory = nullptr;
 	vk::raii::ImageView depthImageView = nullptr;
@@ -174,6 +186,10 @@ private:
 	vk::raii::Buffer tlasBuffer = nullptr;
 	vk::raii::DeviceMemory tlasBufferMemory = nullptr;
 	vk::raii::AccelerationStructureKHR tlas = nullptr;
+
+	vk::raii::Image outImage = nullptr;	// raytracing에서 render target이 될 이미지
+	vk::raii::DeviceMemory outImageMemory = nullptr;
+	vk::raii::ImageView outImageView = nullptr;
 
 	std::vector<vk::raii::Buffer> shaderStorageBuffers;
 	std::vector<vk::raii::DeviceMemory> shaderStorageBuffersMemory;
@@ -216,10 +232,10 @@ private:
 		pickPhysicalDevice();
 		createLogicalDevice();
 		createSwapChain();
-		createSwapchainImageViews();
+		//createSwapchainImageViews();
 		createDescriptorSetLayout();
 		createComputeDescriptorSetLayout();
-		createGraphicsPipeline();
+		//createGraphicsPipeline();
 		createComputePipeline();
 		// createRTPipeline();
 		createCommandPool();
@@ -232,10 +248,16 @@ private:
 		//createIndexBuffer();
 		createBLAS();
 		createTLAS();
+		//createOutImage();
+
 		createShaderStorageBuffers();
 		createUniformBuffers();
+		
 		createDescriptorPool();
 		createDescriptorSets();
+
+		//createShaderBindingTable();
+
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -314,9 +336,13 @@ private:
 	std::vector<const char*> requiredDeviceExtension = { 
 		vk::KHRSwapchainExtensionName,
 		//vk::KHRBufferDeviceAddressExtensionName, // 1.2부터 core라 확장 불필요
-		vk::KHRDeferredHostOperationsExtensionName,
-		vk::KHRAccelerationStructureExtensionName,
-		vk::KHRRayTracingPipelineExtensionName,
+		vk::KHRDeferredHostOperationsExtensionName,	// not used
+		vk::EXTDescriptorIndexingExtensionName,	// not used
+		vk::KHRAccelerationStructureExtensionName, // 이걸 쓰려면 위에 3개가 필요함
+
+		vk::KHRSpirv14ExtensionName,
+		vk::KHRRayTracingPipelineExtensionName, // 이걸 쓰려면 위에 1개가 필요함
+		// extension hierechy가 있음
 	};
 
 	bool isDeviceSuitable(vk::raii::PhysicalDevice const& physicalDevice)
@@ -384,6 +410,18 @@ private:
 		}
 
 		physicalDevice = *devIter;
+
+		// (RT) shader group handle size
+		// Physical device에 쿼리해서 물어봄
+		// Vulkan hardware capability viewer를 보고 properties -> extensions -> vk_khr_ray_tracing_pipeline을 보면 됨
+		// 실제로 이 값들을 사용해야하기 때문에 쿼리를 해야한다
+		auto prop = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+		auto const& rtProps = prop.get< vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+
+		// vulkan spec대로 드라이버가 구현이 되는 건데 스펙을 보면 shader group handle size는 exact하게 32가 되어야한다고 한다?
+		// 그래서 32로 강제
+		if (rtProps.shaderGroupHandleSize != SHADER_GROUP_HANDLE_SIZE)
+			throw std::runtime_error("shaderGroupHandleSize must be 32!");
 
 		std::cout << "Selected GPU : " << static_cast<const char*>(physicalDevice.getProperties().deviceName) << "\n";
 	}
@@ -508,7 +546,8 @@ private:
 			.imageColorSpace = swapChainSurfaceFormat.colorSpace,
 			.imageExtent = swapchainExtent,
 			.imageArrayLayers = 1,
-			.imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+			//.imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+			.imageUsage = vk::ImageUsageFlagBits::eTransferDst,
 			.imageSharingMode = vk::SharingMode::eExclusive,
 			.preTransform = surfaceCapabilities.currentTransform,
 			.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
@@ -523,13 +562,15 @@ private:
 	// Image views
 	vk::raii::ImageView createImageView(vk::Image const &image, 
 										vk::Format format, 
-										vk::ImageAspectFlags aspectFlags, 
-										uint32_t mipLevels)
+										vk::ComponentMapping component = vk::ComponentMapping(),
+										vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor,
+										uint32_t mipLevels = 1)
 	{
 		vk::ImageViewCreateInfo viewInfo{
 			.image = image,
 			.viewType = vk::ImageViewType::e2D,
 			.format = format,
+			.components = component,
 			.subresourceRange = {
 				.aspectMask = aspectFlags,
 				.baseMipLevel = 0,
@@ -542,19 +583,23 @@ private:
 		return vk::raii::ImageView(device, viewInfo);
 	}
 
-	void createSwapchainImageViews()
-	{
-		assert(swapChainImageViews.empty());
+	// 그래픽스 파이프라인에서는 render target, color attachment 그러니까 fragment shader의 output이 되었음
+	// 이제 그래픽스 파이프라인 안 쓸거니까 이제 view를 만들 필요가 없음
+	// image view가 쓰이는 건 render target으로 쓰거나 texture로 쓸 때 이 2가지 용도로 쓰는데
+	// 둘 다 쓰지 않으니 패스하면됨
+	//void createSwapchainImageViews()
+	//{
+	//	assert(swapChainImageViews.empty());
 
-		swapChainImageViews.reserve(swapChainImages.size());
-		for (auto& image : swapChainImages) {
-			swapChainImageViews.emplace_back(
-				createImageView(image, 
-								swapChainSurfaceFormat.format, 
-								vk::ImageAspectFlagBits::eColor, 1)
-			);
-		}
-	}
+	//	swapChainImageViews.reserve(swapChainImages.size());
+	//	for (auto& image : swapChainImages) {
+	//		swapChainImageViews.emplace_back(
+	//			createImageView(image, 
+	//							swapChainSurfaceFormat.format, 
+	//							vk::ImageAspectFlagBits::eColor, 1)
+	//		);
+	//	}
+	//}
 
 	// Graphics pipeline
 	static std::vector<char> readFile(const std::string& filename) {
@@ -861,7 +906,7 @@ private:
 			vk::ImageTiling::eOptimal,
 			vk::ImageUsageFlagBits::eDepthStencilAttachment,
 			vk::MemoryPropertyFlagBits::eDeviceLocal);
-		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
+		depthImageView = createImageView(depthImage, depthFormat, {}, vk::ImageAspectFlagBits::eDepth, 1);
 	}
 
 	// Images
@@ -928,56 +973,6 @@ private:
 		image.bindMemory(imageMemory, 0);
 
 		return { std::move(image), std::move(imageMemory) };
-	}
-
-	// Texture images
-	void transitionImageLayout(
-		vk::raii::CommandBuffer &commandBuffer,
-		const vk::raii::Image &image,
-		vk::ImageLayout oldLayout,
-		vk::ImageLayout newLayout,
-		uint32_t mipLevels)
-	{
-		vk::ImageMemoryBarrier barrier{
-			.oldLayout = oldLayout,
-			.newLayout = newLayout,
-			.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-			.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-			.image = image,
-			.subresourceRange = {
-				.aspectMask = vk::ImageAspectFlagBits::eColor,
-				.levelCount = mipLevels,
-				.layerCount = 1
-			}
-		};
-
-		vk::PipelineStageFlags sourceStage;
-		vk::PipelineStageFlags destinationStage;
-
-		if (oldLayout == vk::ImageLayout::eUndefined && 
-			newLayout == vk::ImageLayout::eTransferDstOptimal)
-		{
-			barrier.srcAccessMask = {};
-			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-
-			sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-			destinationStage = vk::PipelineStageFlagBits::eTransfer;
-		}
-		else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && 
-				 newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
-		{
-			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-
-			sourceStage = vk::PipelineStageFlagBits::eTransfer;
-			destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
-		}
-		else
-		{
-			throw std::invalid_argument("unsupported layout transition!");
-		}
-
-		commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, {}, nullptr, barrier);
 	}
 
 	void copyBufferToImage(vk::raii::CommandBuffer& commandBuffer,
@@ -1127,6 +1122,7 @@ private:
 							  textureImage, 
 							  vk::ImageLayout::eUndefined, 
 							  vk::ImageLayout::eTransferDstOptimal, 
+							  vk::ImageAspectFlagBits::eColor,
 							  mipLevels);
 		copyBufferToImage(commandBuffer, stagingBuffer, textureImage, texWidth, texHeight);
 		endSingleTimeCommands(std::move(commandBuffer));
@@ -1138,6 +1134,7 @@ private:
 	{
 		textureImageView = createImageView(*textureImage, 
 										   vk::Format::eR8G8B8A8Srgb, 
+										   {},
 										   vk::ImageAspectFlagBits::eColor, 
 										   mipLevels);
 	}
@@ -1236,12 +1233,10 @@ private:
 				properties)
 		};
 
+		vk::MemoryAllocateFlagsInfo flagsInfo{};
 		if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
 		{
-			vk::MemoryAllocateFlagsInfo flagsInfo{
-				.sType = vk::StructureType::eMemoryAllocateFlagsInfo,
-				.flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
-			};
+			flagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
 			memoryAllocateInfo.pNext = &flagsInfo;
 		}
 
@@ -1618,6 +1613,47 @@ private:
 		// 지금까지 raytracing이 동작하는 scene을 만들어줌 -> BVH 구조를 만들어준것
 	}
 
+	// (RT) raytracing에서 출력 대상이 될 Image
+	void createOutImage()
+	{
+		vk::Format format = vk::Format::eR8G8B8A8Srgb;	// issue: swapchain format이랑 같아야하는데 swapchain format인 BGRA_SRGB는 storage bit를 지원하지 않음(optimal tiling)
+
+		std::tie(outImage, outImageMemory) = createImage(
+			WIDTH, HEIGHT,
+			1,
+			format,
+			vk::ImageTiling::eOptimal,
+			vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc,	// 그래픽스에서는 color여야지 쓸 수 있고, comput/rt에서는 storage image에 쓸 수 있다
+			vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+		outImageView = createImageView(outImage, 
+			format, 
+			{ .r = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eR }, 
+			vk::ImageAspectFlagBits::eColor, 1);
+
+		auto commandBuffer = beginSingleTimeCommands();
+		commandBuffer.begin({});
+		{
+			// compute/rt 에서는 쓰기 전용 layout이 따로 없어서 general로 써야한다
+			transitionImageLayout(commandBuffer,
+				outImage,
+				vk::ImageLayout::eUndefined,
+				vk::ImageLayout::eGeneral,
+				{}, {},
+				vk::PipelineStageFlagBits2::eAllCommands,
+				vk::PipelineStageFlagBits2::eAllCommands,
+				vk::ImageAspectFlagBits::eColor);
+		}
+		commandBuffer.end();
+
+		vk::SubmitInfo submitInfo{
+			.commandBufferCount = 1,
+			.pCommandBuffers = &*commandBuffer
+		};
+		graphicsQueue.submit(submitInfo, nullptr);
+		graphicsQueue.waitIdle();
+	}
+
 	// Descriptor sets
 	void createUniformBuffers()
 	{
@@ -1788,38 +1824,94 @@ private:
 		}
 	}
 
-	void transition_image_layout(vk::Image               image,
-								 vk::ImageLayout         old_layout,
-								 vk::ImageLayout         new_layout,
-								 vk::AccessFlags2        src_access_mask,
-								 vk::AccessFlags2        dst_access_mask,
-								 vk::PipelineStageFlags2 src_stage_mask,
-								 vk::PipelineStageFlags2 dst_stage_mask,
-								 vk::ImageAspectFlags	image_aspect_flags)
+	// Texture images
+	void transitionImageLayout(
+		vk::raii::CommandBuffer& commandBuffer,
+		const vk::raii::Image& image,
+		vk::ImageLayout oldLayout,
+		vk::ImageLayout newLayout,
+		vk::ImageAspectFlags imageAspectMask,
+		uint32_t mipLevels)
 	{
+		vk::AccessFlags2 srcAccessMask;
+		vk::AccessFlags2 dstAccessMask;
+		vk::PipelineStageFlags2 srcStageMask;
+		vk::PipelineStageFlags2 dstStageMask;
+
+		if (oldLayout == vk::ImageLayout::eUndefined &&
+			newLayout == vk::ImageLayout::eTransferDstOptimal)
+		{
+			srcAccessMask = {};
+			dstAccessMask = vk::AccessFlagBits2::eTransferWrite;
+
+			srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
+			dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
+		}
+		else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
+			newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
+		{
+			srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+			dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+
+			srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
+			dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
+		}
+		else
+		{
+			throw std::invalid_argument("unsupported layout transition!");
+		}
+
+		transitionImageLayout(commandBuffer, 
+			image, 
+			oldLayout, newLayout, 
+			srcAccessMask, dstAccessMask, 
+			srcStageMask, dstStageMask, 
+			imageAspectMask);
+	}
+
+	// Render target
+	void transitionImageLayout(
+		vk::raii::CommandBuffer& commandBuffer,
+		const vk::raii::Image& image,
+		vk::ImageLayout oldLayout,
+		vk::ImageLayout newLayout,
+		vk::AccessFlags2        srcAccessMask,
+		vk::AccessFlags2        dstAccessMask,
+		vk::PipelineStageFlags2 srcStageMask,
+		vk::PipelineStageFlags2 dstStageMask,
+		vk::ImageAspectFlags imageAspectMask,
+		uint32_t mipLevels = 1)
+	{
+		// 이미지 메모리 베리어란? 총 3가지 용도가 있음
+		// 1. 동기화를 도와주는 목적, 리소스의 접근을 섬세하게 제어해줄 수 있다 -> accessmask, stagemask
+		// 2. 여러 개의 queue family를 쓸 때 (2개의 queue가 동시에 돌아가는 등) queue 동기화
+		// 3. image layout 전환, vkBufferMemoryBarrier라는 것도 있는데 비슷하게 생김
+		// 그런데 buffermemorybarrier에는 layout 넣어주는 곳이 없음 -> 프로그래머가 알아서하라는 얘기
+		// 반면에 image layout은 굉장히 복잡하기 때문에 드라이버가 해줌
 		vk::ImageMemoryBarrier2 barrier = {
-			.srcStageMask = src_stage_mask,
-			.srcAccessMask = src_access_mask,
-			.dstStageMask = dst_stage_mask,
-			.dstAccessMask = dst_access_mask,
-			.oldLayout = old_layout,
-			.newLayout = new_layout,
-			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.srcStageMask = srcStageMask,
+			.srcAccessMask = srcAccessMask,
+			.dstStageMask = dstStageMask,
+			.dstAccessMask = dstAccessMask,
+			.oldLayout = oldLayout,	// 현재 레이아웃
+			.newLayout = newLayout,	// 변경할 레이아웃
+			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,	// queue family 1개만 쓰고 있음
 			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.image = image,
+			.image = image,		// layout이 변경될 대상 이미지
 			.subresourceRange = {
-				   .aspectMask = image_aspect_flags,
-				   .baseMipLevel = 0,
-				   .levelCount = 1,
-				   .baseArrayLayer = 0,
-				   .layerCount = 1} };
+				.aspectMask = imageAspectMask,
+				.baseMipLevel = 0,
+				.levelCount = mipLevels,
+				.baseArrayLayer = 0,
+				.layerCount = 1} 
+		};
 
 		vk::DependencyInfo dependency_info = {
 			.dependencyFlags = {},
 			.imageMemoryBarrierCount = 1,
-			.pImageMemoryBarriers = &barrier };
+			.pImageMemoryBarriers = &barrier };	// imageMemoryBarrier를 쓸 것
 
-		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);
+		commandBuffer.pipelineBarrier2(dependency_info);
 	}
 
 	void recordCommandBuffer(uint32_t imageIndex)
@@ -1828,23 +1920,25 @@ private:
 		commandBuffer.reset();
 		commandBuffer.begin({});
 
-		transition_image_layout(swapChainImages[imageIndex],
-			vk::ImageLayout::eUndefined,
-			vk::ImageLayout::eColorAttachmentOptimal,
-			{},
-			vk::AccessFlagBits2::eColorAttachmentWrite,
-			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-			vk::ImageAspectFlagBits::eColor);
+		//transitionImageLayout(commandBuffer,
+		//	swapChainImages[imageIndex],
+		//	vk::ImageLayout::eUndefined,
+		//	vk::ImageLayout::eColorAttachmentOptimal,
+		//	{},
+		//	vk::AccessFlagBits2::eColorAttachmentWrite,
+		//	vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		//	vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		//	vk::ImageAspectFlagBits::eColor);
 
-		transition_image_layout(*depthImage,
-			vk::ImageLayout::eUndefined,
-			vk::ImageLayout::eDepthAttachmentOptimal,
-			vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-			vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-			vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-			vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-			vk::ImageAspectFlagBits::eDepth);
+		//transitionImageLayout(commandBuffer,
+		//	*depthImage,
+		//	vk::ImageLayout::eUndefined,
+		//	vk::ImageLayout::eDepthAttachmentOptimal,
+		//	vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+		//	vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+		//	vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		//	vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		//	vk::ImageAspectFlagBits::eDepth);
 
 		vk::ClearValue clearColor = { .color = {.float32 = {{ 0.0f, 0.0f, 0.0f, 1.0f }} } };
 		vk::RenderingAttachmentInfo attachmentInfo = {
@@ -1896,14 +1990,15 @@ private:
 		}
 		commandBuffer.endRendering();
 
-		transition_image_layout(swapChainImages[imageIndex],
-			vk::ImageLayout::eColorAttachmentOptimal,
-			vk::ImageLayout::ePresentSrcKHR,
-			vk::AccessFlagBits2::eColorAttachmentWrite,
-			{},
-			vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-			vk::PipelineStageFlagBits2::eBottomOfPipe,
-			vk::ImageAspectFlagBits::eColor);
+		//transitionImageLayout(commandBuffer,
+		//	swapChainImages[imageIndex],
+		//	vk::ImageLayout::eColorAttachmentOptimal,
+		//	vk::ImageLayout::ePresentSrcKHR,
+		//	vk::AccessFlagBits2::eColorAttachmentWrite,
+		//	{},
+		//	vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		//	vk::PipelineStageFlagBits2::eBottomOfPipe,
+		//	vk::ImageAspectFlagBits::eColor);
 
 		commandBuffer.end();
 	}
