@@ -135,6 +135,8 @@ private:
 	vk::raii::Queue computeQueue = nullptr;
 	vk::raii::SurfaceKHR surface = nullptr;
 
+	vk::PhysicalDeviceRayTracingPipelinePropertiesKHR rtProps;
+
 	uint32_t frameIndex = 0;
 	double lastFrameTime = 0.0;
 	double lastTime = 0.0;
@@ -161,9 +163,9 @@ private:
 	// Raytracing에서는 descriptorSetLayout말고 접근할 수 있는 특별한 문법이 있다 -> shader binding table
 	vk::raii::Buffer sbtBuffer = nullptr;
 	vk::raii::DeviceMemory sbtBufferMemory = nullptr;
-	vk::StridedDeviceAddressRangeKHR rgenSbt{};
-	vk::StridedDeviceAddressRangeKHR missSbt{};
-	vk::StridedDeviceAddressRangeKHR hitSbt{};
+	vk::StridedDeviceAddressRegionKHR rgenSbt{};
+	vk::StridedDeviceAddressRegionKHR missSbt{};
+	vk::StridedDeviceAddressRegionKHR hitgSbt{};
 
 	vk::raii::Image depthImage = nullptr;
 	vk::raii::DeviceMemory depthImageMemory = nullptr;
@@ -209,6 +211,7 @@ private:
 	vk::raii::CommandPool commandPool = nullptr;
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
 	std::vector<vk::raii::CommandBuffer> computeCommandBuffers;
+	std::vector<vk::raii::CommandBuffer> rtCommandBuffers;
 
 	std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
@@ -262,7 +265,7 @@ private:
 		createDescriptorPool();
 		createDescriptorSets();
 
-		//createShaderBindingTable();
+		createShaderBindingTable();
 
 		createCommandBuffers();
 		createSyncObjects();
@@ -422,7 +425,7 @@ private:
 		// Vulkan hardware capability viewer를 보고 properties -> extensions -> vk_khr_ray_tracing_pipeline을 보면 됨
 		// 실제로 이 값들을 사용해야하기 때문에 쿼리를 해야한다
 		auto prop = physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-		auto const& rtProps = prop.get< vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+		rtProps = prop.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
 		// vulkan spec대로 드라이버가 구현이 되는 건데 스펙을 보면 shader group handle size는 exact하게 32가 되어야한다고 한다?
 		// 그래서 32로 강제
@@ -902,6 +905,7 @@ private:
 	}
 
 	// RT pipeline
+	// 파이프라인이란 쉐이더들의 흐름을 최적화하면서 감싸놓은 것
 	void createRTPipeline()
 	{
 		// pipeline layout
@@ -912,9 +916,162 @@ private:
 
 		rtPipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
+		// 한개의 raygen shader와 여러개의 chit, miss, intersection 쉐이더들이 들어갈 수 있음
+		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
 
-		// to be continued...
+		vk::PipelineShaderStageCreateInfo rgenShaderStageInfo{
+			.stage = vk::ShaderStageFlagBits::eRaygenKHR,
+			.module = shaderModule,
+			.pName = "rgenMain"
+		};
+
+		vk::PipelineShaderStageCreateInfo chitShaderStageInfo{
+			.stage = vk::ShaderStageFlagBits::eClosestHitKHR,
+			.module = shaderModule,
+			.pName = "chitMain"
+		};
+
+		vk::PipelineShaderStageCreateInfo missShaderStageInfo{
+			.stage = vk::ShaderStageFlagBits::eMissKHR,
+			.module = shaderModule,
+			.pName = "missMain"
+		};
+
+		vk::PipelineShaderStageCreateInfo stages[] = { rgenShaderStageInfo, missShaderStageInfo, chitShaderStageInfo };
+
+		// 쉐이더모듈 한 개당 stage하나이다
+		// shaderGroups과 stage는 별개이지만 지금은 수를 같게 만들었음
+		vk::RayTracingShaderGroupCreateInfoKHR shaderGroups[] = {
+			{
+				.type = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+				.generalShader = 0,	// stages 내 index -> raygen, raygen은 하나 miss shader는 여러개가 있을 수 있는데
+				// 각각 하나의 shaderGroup을 가지는 것이다
+				.closestHitShader = vk::ShaderUnusedKHR,	// 무조건 unused로 만들어줘야함
+				.anyHitShader = vk::ShaderUnusedKHR,
+				.intersectionShader = vk::ShaderUnusedKHR,
+			},
+			{
+				.type = vk::RayTracingShaderGroupTypeKHR::eGeneral,
+				.generalShader = 1,	// missShader
+				.closestHitShader = vk::ShaderUnusedKHR,
+				.anyHitShader = vk::ShaderUnusedKHR,
+				.intersectionShader = vk::ShaderUnusedKHR,
+			},
+			{
+				.type = vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup,
+				.generalShader = vk::ShaderUnusedKHR,	// triangleshitgroup 에서는 general shader하고 intersection이 shaderUnused여야한다
+				.closestHitShader = 2,
+				.anyHitShader = vk::ShaderUnusedKHR,
+				.intersectionShader = vk::ShaderUnusedKHR,
+			},
+		};
+
+		vk::RayTracingPipelineCreateInfoKHR rtPipelineCreateInfo{
+			.stageCount = sizeof(stages) / sizeof(stages[0]),
+			.pStages = stages,
+			.groupCount = sizeof(shaderGroups) / sizeof(shaderGroups[0]),	// (RT)
+			.pGroups = shaderGroups,										// (RT)
+			.maxPipelineRayRecursionDepth = 1,								// (RT)
+			.layout = rtPipelineLayout,
+		};
+		// RT에만 들어가는 fields; maxPipelineRayRecursionDepth -> 재귀호출을 몇번이나 할 수 있나?
+		// GPU 프로그램은 함수 호출 때 CPU와 달리 스택이 없다
+		// inline 함수처럼 동작을 한다
+		// 스택 이런 것보다 최적화가 잘 되어 있다
+		// 매개변수로 넘겨줄 때 레지스터의 그 메모리 위치는 그대로 있고 inline 함수처럼 들어가서 최적화가 잘 되는 것
+		// 대신에 재귀호출이 불가능했다... 지금은 재귀호출을 가능하게 만들긴했음
+
+		rtPipeline = device.createRayTracingPipelineKHR(nullptr, nullptr, rtPipelineCreateInfo);
 	}
+
+	struct ShaderGroupHandle {
+		uint8_t data[SHADER_GROUP_HANDLE_SIZE];		// 1byte * 32 = 32 bytes
+	};
+
+	struct HitgCustomData {
+		float color[3];
+	};
+
+	/*
+	In the vulkan spec,
+	[VUID-vkCmdTraceRaysKHR-stride-03686] pMissShaderBindingTable->stride must be a multiple of VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupHandleAlignment
+	[VUID-vkCmdTraceRaysKHR-stride-03690] pHitShaderBindingTable->stride must be a multiple of VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupHandleAlignment
+	[VUID-vkCmdTraceRaysKHR-pRayGenShaderBindingTable-03682] pRayGenShaderBindingTable->deviceAddress must be a multiple of VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupBaseAlignment
+	[VUID-vkCmdTraceRaysKHR-pMissShaderBindingTable-03685] pMissShaderBindingTable->deviceAddress must be a multiple of VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupBaseAlignment
+	[VUID-vkCmdTraceRaysKHR-pHitShaderBindingTable-03689] pHitShaderBindingTable->deviceAddress must be a multiple of VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupBaseAlignment
+
+	As shown in the vulkan spec 40.3.1. Indexing Rules,
+		pHitShaderBindingTable->deviceAddress + pHitShaderBindingTable->stride × (
+		instanceShaderBindingTableRecordOffset + geometryIndex × sbtRecordStride + sbtRecordOffset )
+	*/
+
+	void createShaderBindingTable()
+	{
+		auto alignTo = [](auto value, auto alignment) -> decltype(value) {	// alignment는 2의 승수여야함
+			return (value + (decltype(value))alignment - 1) & ~((decltype(value))alignment - 1);
+		};
+
+		const uint32_t handleSize = SHADER_GROUP_HANDLE_SIZE;
+		const uint32_t groupCount = 3;	// 편의상 하드코딩
+		
+		auto handles = rtPipeline.getRayTracingShaderGroupHandlesKHR<ShaderGroupHandle>(
+			0, groupCount, groupCount * handleSize
+		);	// record 하나당 하나의 handle이 들어가야함, 총 3개니까 handles vector는 총 32 * 3 = 96 bytes
+
+		ShaderGroupHandle rgenHandle = handles[0];
+		ShaderGroupHandle missHandle = handles[1];
+		ShaderGroupHandle hitgHandle = handles[2];
+
+		// shaderGroupHandleAlignment와 shaderGroupBaseAlignment 쿼리해서 써야함
+		// 실제 stride는 record의 byte 길이
+		// shaderGroupHandleAlignment -> 32 max
+		// shaderGroupBaseAlignment -> 64 max
+		const uint32_t rgenStride = alignTo(handleSize, rtProps.shaderGroupHandleAlignment);
+		rgenSbt = { 0, rgenStride, rgenStride };	// device address, stride, size
+
+		const uint64_t missOffset = alignTo(rgenSbt.size, rtProps.shaderGroupBaseAlignment);
+		const uint32_t missStride = alignTo(handleSize, rtProps.shaderGroupHandleAlignment);
+		missSbt = { 0, missStride, missStride };	// miss shader가 만약 여러개면 size가 늘어날 것
+
+		const uint32_t hitgCustomDataSize = sizeof(HitgCustomData);
+		const uint32_t geometryCount = 4;	// 각각의 geometry, geometry마다 record를 하나씩 줄 것임
+		const uint64_t hitgOffset = alignTo(missOffset + missSbt.size, rtProps.shaderGroupBaseAlignment);
+		const uint32_t hitgStride = alignTo(handleSize + hitgCustomDataSize, rtProps.shaderGroupHandleAlignment);	// 32 + 12 = 44 -> 64로 align됨
+		hitgSbt = { 0, hitgStride, hitgStride * geometryCount };	// size는 stride의 배수
+		// 보통 material마다 group을 만듦
+
+		const uint64_t sbtSize = hitgOffset + hitgSbt.size;
+		std::tie(sbtBuffer, sbtBufferMemory) = createBuffer(
+			sbtSize,
+			vk::BufferUsageFlagBits::eShaderBindingTableKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent	// 편의상, 실제 implementation 때는 device local로 올릴 것
+		);
+
+		auto sbtAddress = device.getBufferAddress({ .buffer = sbtBuffer });
+		if (sbtAddress != alignTo(sbtAddress, rtProps.shaderGroupBaseAlignment))	// device address는 shaderGroupBaseAlignment에 align되어야함!
+			throw std::runtime_error("It will not be happened!");					// getBufferAddress가 shaderGroupBaseAlignment에 align되어야한다는 것인데, 내가 찾아봤을 땐 그러한 스펙은 찾을 수 없지만 동작은 잘됨
+		rgenSbt.deviceAddress = sbtAddress;
+		missSbt.deviceAddress = sbtAddress + missOffset;
+		hitgSbt.deviceAddress = sbtAddress + hitgOffset;
+
+		uint8_t* dst = static_cast<uint8_t*>(sbtBufferMemory.mapMemory(0, sbtSize));
+		{
+			*(ShaderGroupHandle*) dst = rgenHandle;		// 이렇게 강제형변환하는 것이 memcpy보다 덜 복잡하기도하고 빠르기도 하다
+			*(ShaderGroupHandle*)(dst + missOffset) = missHandle;
+
+			*(ShaderGroupHandle*)(dst + hitgOffset + 0 * hitgStride) = hitgHandle;
+			*(HitgCustomData*	)(dst + hitgOffset + 0 * hitgStride + handleSize) = { 0.6f, 0.1f, 0.2f }; // Deep Red Wine
+			*(ShaderGroupHandle*)(dst + hitgOffset + 1 * hitgStride) = hitgHandle;
+			*(HitgCustomData*	)(dst + hitgOffset + 1 * hitgStride + handleSize) = { 0.1f, 0.8f, 0.4f }; // Emerald Green
+			*(ShaderGroupHandle*)(dst + hitgOffset + 2 * hitgStride) = hitgHandle;
+			*(HitgCustomData*	)(dst + hitgOffset + 2 * hitgStride + handleSize) = { 0.9f, 0.7f, 0.1f }; // Golden Yellow
+			*(ShaderGroupHandle*)(dst + hitgOffset + 3 * hitgStride) = hitgHandle;
+			*(HitgCustomData*	)(dst + hitgOffset + 3 * hitgStride + handleSize) = { 0.3f, 0.6f, 0.9f }; // Dawn Sky Blue
+		}	
+		// 사실 stride의 크기를 똑같이 만들거나 (가장 큰 거에 맞춰서) 아니면 SBT를 3개(그러니까 buffer 3개)를 만드는 더 쉬운 방법도 있다
+		sbtBufferMemory.unmapMemory();
+	}
+
 
 	vk::Format findSupportedFormat(
 		const std::vector<vk::Format>& candidates, 
@@ -1906,6 +2063,7 @@ private:
 
 		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 		computeCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
+		rtCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 	}
 
 	// Semaphores & fences
@@ -2123,6 +2281,17 @@ private:
 		commandBuffer.end();
 	}
 
+	void recordRTCommandBuffer()
+	{
+		const auto& commandbuffer = rtCommandBuffers[frameIndex];
+		commandbuffer.reset();
+		commandbuffer.begin({});
+		// RT pipeline
+		{
+
+		}
+	}
+
 	void updateUniformBuffer(uint32_t currentFrame)
 	{
 		//static auto startTime = std::chrono::high_resolution_clock::now();
@@ -2151,63 +2320,63 @@ private:
 
 	void drawFrame()
 	{
-		// Submit computeQueue
-		{
-			auto fenceResult = device.waitForFences(*computeInFlightFences[frameIndex], vk::True, UINT64_MAX);
-			if (fenceResult != vk::Result::eSuccess) {
-				throw std::runtime_error("failed to wait for fence!");
-			}
-			updateUniformBuffer(frameIndex);
-			device.resetFences(*computeInFlightFences[frameIndex]);
-			computeCommandBuffers[frameIndex].reset();
-			recordComputeCommandBuffer();
+		//// Submit computeQueue
+		//{
+		//	auto fenceResult = device.waitForFences(*computeInFlightFences[frameIndex], vk::True, UINT64_MAX);
+		//	if (fenceResult != vk::Result::eSuccess) {
+		//		throw std::runtime_error("failed to wait for fence!");
+		//	}
+		//	updateUniformBuffer(frameIndex);
+		//	device.resetFences(*computeInFlightFences[frameIndex]);
+		//	computeCommandBuffers[frameIndex].reset();
+		//	recordComputeCommandBuffer();
 
-			const vk::SubmitInfo submitInfo{
-				.commandBufferCount = 1,
-				.pCommandBuffers = &*computeCommandBuffers[frameIndex],
-				.signalSemaphoreCount = 1,
-				.pSignalSemaphores = &*computeFinishedSemaphores[frameIndex],
-			};
-			computeQueue.submit(submitInfo, *computeInFlightFences[frameIndex]);
-		}
+		//	const vk::SubmitInfo submitInfo{
+		//		.commandBufferCount = 1,
+		//		.pCommandBuffers = &*computeCommandBuffers[frameIndex],
+		//		.signalSemaphoreCount = 1,
+		//		.pSignalSemaphores = &*computeFinishedSemaphores[frameIndex],
+		//	};
+		//	computeQueue.submit(submitInfo, *computeInFlightFences[frameIndex]);
+		//}
 
-		// Submit graphicsQueue & present
-		{
-			auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
-			if (fenceResult != vk::Result::eSuccess) {
-				throw std::runtime_error("failed to wait for fence!");
-			}
-			device.resetFences(*inFlightFences[frameIndex]);
+		//// Submit graphicsQueue & present
+		//{
+		//	auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
+		//	if (fenceResult != vk::Result::eSuccess) {
+		//		throw std::runtime_error("failed to wait for fence!");
+		//	}
+		//	device.resetFences(*inFlightFences[frameIndex]);
 
-			auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
-			recordCommandBuffer(imageIndex);
+		//	auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+		//	recordCommandBuffer(imageIndex);
 
-			vk::Semaphore waitSemaphores[] = { presentCompleteSemaphores[frameIndex], computeFinishedSemaphores[frameIndex] };
-			vk::PipelineStageFlags waitDestinationStageMask[] = { vk::PipelineStageFlagBits::eVertexInput,
-																  vk::PipelineStageFlagBits::eColorAttachmentOutput };
+		//	vk::Semaphore waitSemaphores[] = { presentCompleteSemaphores[frameIndex], computeFinishedSemaphores[frameIndex] };
+		//	vk::PipelineStageFlags waitDestinationStageMask[] = { vk::PipelineStageFlagBits::eVertexInput,
+		//														  vk::PipelineStageFlagBits::eColorAttachmentOutput };
 
-			const vk::SubmitInfo submitInfo{
-				.waitSemaphoreCount = 2,
-				.pWaitSemaphores = waitSemaphores,
-				.pWaitDstStageMask = waitDestinationStageMask,
-				.commandBufferCount = 1,
-				.pCommandBuffers = &*commandBuffers[frameIndex],
-				.signalSemaphoreCount = 1,
-				.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex],
-			};
+		//	const vk::SubmitInfo submitInfo{
+		//		.waitSemaphoreCount = 2,
+		//		.pWaitSemaphores = waitSemaphores,
+		//		.pWaitDstStageMask = waitDestinationStageMask,
+		//		.commandBufferCount = 1,
+		//		.pCommandBuffers = &*commandBuffers[frameIndex],
+		//		.signalSemaphoreCount = 1,
+		//		.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex],
+		//	};
 
-			graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
+		//	graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
 
-			const vk::PresentInfoKHR presentInfoKHR{
-				.waitSemaphoreCount = 1,
-				.pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
-				.swapchainCount = 1,
-				.pSwapchains = &*swapChain,
-				.pImageIndices = &imageIndex
-			};
+		//	const vk::PresentInfoKHR presentInfoKHR{
+		//		.waitSemaphoreCount = 1,
+		//		.pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
+		//		.swapchainCount = 1,
+		//		.pSwapchains = &*swapChain,
+		//		.pImageIndices = &imageIndex
+		//	};
 
-			result = graphicsQueue.presentKHR(presentInfoKHR);
-		}
+		//	result = graphicsQueue.presentKHR(presentInfoKHR);
+		//}
 
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
