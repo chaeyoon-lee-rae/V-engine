@@ -156,7 +156,7 @@ void rgenMain()
              ray,
              hitValue);              // payload
 
-    image[launchID] = float4(hitValue, 0.0);
+    image[launchID] = float4(hitValue, 1.0);
 }
 
 // ── miss ──

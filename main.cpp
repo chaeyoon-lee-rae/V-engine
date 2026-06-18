@@ -241,17 +241,17 @@ private:
 		createLogicalDevice();
 		createSwapChain();
 		//createSwapchainImageViews();
-		createDescriptorSetLayout();
-		createComputeDescriptorSetLayout();
+		//createDescriptorSetLayout();
+		//createComputeDescriptorSetLayout();
 		createRTDescriptorSetLayout();
 		//createGraphicsPipeline();
-		createComputePipeline();
+		//createComputePipeline();
 		createRTPipeline();
 		createCommandPool();
-		createDepthResources();
-		createTextureImage();
-		createTextureImageView();
-		createTextureSampler();
+		//createDepthResources();
+		//createTextureImage();
+		//createTextureImageView();
+		//createTextureSampler();
 		//loadModel();
 		//createVertexBuffer();
 		//createIndexBuffer();
@@ -259,7 +259,7 @@ private:
 		createTLAS();
 		createOutImage();
 
-		createShaderStorageBuffers();
+		//createShaderStorageBuffers();
 		createUniformBuffers();
 		
 		createDescriptorPool();
@@ -393,6 +393,7 @@ private:
 			features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
 			features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
 			features.template get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
+			features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorIndexing &&
 			features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
 			features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
 			features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
@@ -465,7 +466,7 @@ private:
 		> featureChain = {
 			{.features = {.samplerAnisotropy = true}},
 			{.shaderDrawParameters = true }, 
-			{.bufferDeviceAddress = true},
+			{.descriptorIndexing = true, .bufferDeviceAddress = true},
 			{.synchronization2 = true, .dynamicRendering = true},
 			{.extendedDynamicState = true },
 			{.accelerationStructure = true},
@@ -1672,10 +1673,7 @@ private:
 		// prebuild에서 사이즈도 얻어오고 필요한 버퍼를 만들어둠
 		// 이제 준비과정이 끝났으니 실제로 빌드를 진행
 		{
-			vk::CommandBufferBeginInfo beginInfo{};
 			auto commandBuffer = beginSingleTimeCommands();	// GPU에서 수행되어야하니 commandbuffer 생성
-
-			commandBuffer.begin(beginInfo);
 			{
 				// 이제 buildBlasInfo에 실제 빌드에 들어가야할 데이터를 넣어준다
 				buildBlasInfo.dstAccelerationStructure = blas;
@@ -1698,15 +1696,7 @@ private:
 				// 여러개의 build acceleration Structures를 만들 수 있도록 해줌
 				commandBuffer.buildAccelerationStructuresKHR(buildBlasInfos, buildBlasRangeInfos);
 			}
-			commandBuffer.end();
-
-			vk::SubmitInfo submitInfo{
-				.commandBufferCount = 1,
-				.pCommandBuffers = &*commandBuffer,
-			};
-
-			graphicsQueue.submit(submitInfo, nullptr);
-			graphicsQueue.waitIdle();
+			endSingleTimeCommands(std::move(commandBuffer));
 		}
 	}
 
@@ -1739,6 +1729,7 @@ private:
 		vk::AccelerationStructureInstanceKHR instanceData[] = { instance0, instance0 };
 		instanceData[0].transform = insTransforms[0];
 		instanceData[1].transform = insTransforms[1];
+		instanceData[1].instanceShaderBindingTableRecordOffset = 2;
 
 		// 마찬가지로 버퍼를 만들어준다 
 		auto [instanceBuffer, instanceBufferMem] = createBuffer(
@@ -1801,7 +1792,6 @@ private:
 
 		{
 			auto commandBuffer = beginSingleTimeCommands();
-			commandBuffer.begin({});
 			{
 				buildTlasInfo.dstAccelerationStructure = tlas;
 				buildTlasInfo.scratchData.deviceAddress = device.getBufferAddress({ .buffer = scratchBuffer });
@@ -1809,14 +1799,7 @@ private:
 				vk::AccelerationStructureBuildRangeInfoKHR buildTlasRangeInfo = { .primitiveCount = instanceCount };	// BLAS에서는 triangle의 개수였음
 				commandBuffer.buildAccelerationStructuresKHR(buildTlasInfo, &buildTlasRangeInfo);
 			}
-			commandBuffer.end();
-
-			vk::SubmitInfo submitInfo{
-				.commandBufferCount = 1,
-				.pCommandBuffers = &*commandBuffer,
-			};
-			graphicsQueue.submit(submitInfo, nullptr);
-			graphicsQueue.waitIdle();
+			endSingleTimeCommands(std::move(commandBuffer));
 		}
 
 		// 지금까지 raytracing이 동작하는 scene을 만들어줌 -> BVH 구조를 만들어준것
@@ -1825,7 +1808,7 @@ private:
 	// (RT) raytracing에서 출력 대상이 될 Image
 	void createOutImage()
 	{
-		vk::Format format = vk::Format::eR8G8B8A8Srgb;	// issue: swapchain format이랑 같아야하는데 swapchain format인 BGRA_SRGB는 storage bit를 지원하지 않음(optimal tiling)
+		vk::Format format = vk::Format::eR8G8B8A8Unorm;	// issue: swapchain format이랑 같아야하는데 swapchain format인 BGRA_SRGB는 storage bit를 지원하지 않음(optimal tiling)
 
 		std::tie(outImage, outImageMemory) = createImage(
 			WIDTH, HEIGHT,
@@ -1841,7 +1824,6 @@ private:
 			vk::ImageAspectFlagBits::eColor, 1);
 
 		auto commandBuffer = beginSingleTimeCommands();
-		commandBuffer.begin({});
 		{
 			// compute/rt 에서는 쓰기 전용 layout이 따로 없어서 general로 써야한다
 			transitionImageLayout(commandBuffer,
@@ -1853,14 +1835,7 @@ private:
 				vk::PipelineStageFlagBits2::eAllCommands,
 				vk::ImageAspectFlagBits::eColor);
 		}
-		commandBuffer.end();
-
-		vk::SubmitInfo submitInfo{
-			.commandBufferCount = 1,
-			.pCommandBuffers = &*commandBuffer
-		};
-		graphicsQueue.submit(submitInfo, nullptr);
-		graphicsQueue.waitIdle();
+		endSingleTimeCommands(std::move(commandBuffer));
 	}
 
 	// Descriptor sets
@@ -2090,12 +2065,12 @@ private:
 
 	// Texture images
 	void transitionImageLayout(
-		vk::raii::CommandBuffer& commandBuffer,
-		const vk::raii::Image& image,
+		const vk::raii::CommandBuffer& commandBuffer,
+		const vk::Image& image,
 		vk::ImageLayout oldLayout,
 		vk::ImageLayout newLayout,
-		vk::ImageAspectFlags imageAspectMask,
-		uint32_t mipLevels)
+		vk::ImageAspectFlags imageAspectMask = vk::ImageAspectFlagBits::eColor,
+		uint32_t mipLevels = 1)
 	{
 		vk::AccessFlags2 srcAccessMask;
 		vk::AccessFlags2 dstAccessMask;
@@ -2120,6 +2095,36 @@ private:
 			srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
 			dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader;
 		}
+		else if (oldLayout == vk::ImageLayout::eGeneral &&
+			newLayout == vk::ImageLayout::eTransferSrcOptimal)
+		{
+			// (RT) outImage: RT가 storage로 쓴 것 → copy source
+			srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+			dstAccessMask = vk::AccessFlagBits2::eTransferRead;
+
+			srcStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR;
+			dstStageMask = vk::PipelineStageFlagBits2::eTransfer;
+		}
+		else if (oldLayout == vk::ImageLayout::eTransferSrcOptimal &&
+			newLayout == vk::ImageLayout::eGeneral)
+		{
+			// (RT) outImage: copy 끝 → 다음 프레임 RT 쓰기를 위해 general 복원
+			srcAccessMask = vk::AccessFlagBits2::eTransferRead;
+			dstAccessMask = vk::AccessFlagBits2::eShaderWrite;
+
+			srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
+			dstStageMask = vk::PipelineStageFlagBits2::eRayTracingShaderKHR;
+		}
+		else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
+			newLayout == vk::ImageLayout::ePresentSrcKHR)
+		{
+			// (RT) swapchain: copy 받음 → present
+			srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+			dstAccessMask = {};
+
+			srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
+			dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe;
+		}
 		else
 		{
 			throw std::invalid_argument("unsupported layout transition!");
@@ -2135,8 +2140,8 @@ private:
 
 	// Render target
 	void transitionImageLayout(
-		vk::raii::CommandBuffer& commandBuffer,
-		const vk::raii::Image& image,
+		const vk::raii::CommandBuffer& commandBuffer,
+		vk::Image image,
 		vk::ImageLayout oldLayout,
 		vk::ImageLayout newLayout,
 		vk::AccessFlags2        srcAccessMask,
@@ -2281,15 +2286,84 @@ private:
 		commandBuffer.end();
 	}
 
-	void recordRTCommandBuffer()
+	void recordRTCommandBuffer(const uint32_t imageIndex)
 	{
+		static const vk::ImageCopy copyRegion = {
+			.srcSubresource = {
+				.aspectMask = vk::ImageAspectFlagBits::eColor,
+				.mipLevel = 0,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+			.dstSubresource = {
+				.aspectMask = vk::ImageAspectFlagBits::eColor,
+				.mipLevel = 0,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+			.extent = {WIDTH, HEIGHT, 1},
+		};
+
 		const auto& commandbuffer = rtCommandBuffers[frameIndex];
 		commandbuffer.reset();
 		commandbuffer.begin({});
 		// RT pipeline
 		{
+			commandbuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, rtPipeline);
+			commandbuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, rtPipelineLayout, 0, *descriptorSets[frameIndex], {});
+			
+			// 하나의 TLAS로 구성을 해서 drawcall(traceRays)를 한번만 호출을 한다
+			// graphics pipeline에서는 매쉬들 개수만큼 draw call을 하는데 (여러가지 최적화 빼고 생각하면)
+			// raytracing은 그렇지 않다
+			// 그래서 거대한 scene에 대해서 대량의 데이터가 한번의 draw call에 다 참조가 되어야한다
+			commandbuffer.traceRaysKHR(rgenSbt, missSbt, hitgSbt, {}, WIDTH, HEIGHT, 1);
+			// 이 command가 제출이 되고 실행이 되면 raygen 실행
+			// ray가 교차됨 -> chit 호출 -> material마다 chit가 다 다름
+			// 교차한 순간에 어떤 material인지 알고 그에 해당하는 chit를 호출을 해야함
+			// 그게 자동으로 일어나게하기 위해서 geometry record맞게 쉐이더 핸들이 저장되어 있어야하고
+			// 그에 맞는 chit가 호출이 되어야함
+			// geometry가 100가 있다면 100개의 record가 있을 텐데
+			// 그 중에 어떤 record인지를 어떻게 아는가? 어떻게 찾아가는가? -> indexing rule
+			// rgen : sbt.deviceaddress에 handle이 저장되어 있어야함
+			// miss : sbt.deviceAddress + sbt.stride * missIndex -> 그러니까 miss shader handle은 연달아서 있어야함 -> traceRayEXT에 missIndex 넣어주는 부분 있음
+			// chit : sbt.deviceAddress + sbt.stride(record size) * (instanceShaderBindingTableRecordOffset + geometryIndex * sbtRecordStride + sbtRecordOffset)
+			// sbtRecordStride, sbtRecordOffset -> traceRayEXT에 들어가 있음
+			// geometryIndex = gl_GeometryIndexEXT, BLAS 내 geometry index
+			// instanceShaderBindingTableRecordOffset -> TLAS 만들때 지정
+			// 이렇게 계산되어야 instance마다, 그리고 geometry마다 구분이 됨
+			// SBT -> 이렇게 handle을 찾아가는 것 뿐만 아니라 추가적인 customData도 필요
+			// ray는 한번만 쏴주고 각 object마다의 data도 필요하기 때문에 이러한 구조가 생김
 
+			transitionImageLayout(
+				commandbuffer, 
+				outImage, 
+				vk::ImageLayout::eGeneral, 
+				vk::ImageLayout::eTransferSrcOptimal);
+
+			transitionImageLayout(
+				commandbuffer,
+				swapChainImages[imageIndex],
+				vk::ImageLayout::eUndefined,
+				vk::ImageLayout::eTransferDstOptimal);
+
+			commandbuffer.copyImage(
+				outImage, vk::ImageLayout::eTransferSrcOptimal, 
+				swapChainImages[imageIndex], vk::ImageLayout::eTransferDstOptimal, 
+				copyRegion);
+
+			transitionImageLayout(
+				commandbuffer,
+				outImage,
+				vk::ImageLayout::eTransferSrcOptimal,
+				vk::ImageLayout::eGeneral);
+
+			transitionImageLayout(
+				commandbuffer,
+				swapChainImages[imageIndex],
+				vk::ImageLayout::eTransferDstOptimal,
+				vk::ImageLayout::ePresentSrcKHR);
 		}
+		commandbuffer.end();
 	}
 
 	void updateUniformBuffer(uint32_t currentFrame)
@@ -2326,7 +2400,6 @@ private:
 		//	if (fenceResult != vk::Result::eSuccess) {
 		//		throw std::runtime_error("failed to wait for fence!");
 		//	}
-		//	updateUniformBuffer(frameIndex);
 		//	device.resetFences(*computeInFlightFences[frameIndex]);
 		//	computeCommandBuffers[frameIndex].reset();
 		//	recordComputeCommandBuffer();
@@ -2340,43 +2413,43 @@ private:
 		//	computeQueue.submit(submitInfo, *computeInFlightFences[frameIndex]);
 		//}
 
-		//// Submit graphicsQueue & present
-		//{
-		//	auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
-		//	if (fenceResult != vk::Result::eSuccess) {
-		//		throw std::runtime_error("failed to wait for fence!");
-		//	}
-		//	device.resetFences(*inFlightFences[frameIndex]);
+		// Submit graphicsQueue & present
+		{
+			auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
+			if (fenceResult != vk::Result::eSuccess) {
+				throw std::runtime_error("failed to wait for fence!");
+			}
+			device.resetFences(*inFlightFences[frameIndex]);
 
-		//	auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
-		//	recordCommandBuffer(imageIndex);
+			updateUniformBuffer(frameIndex);
+			auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
+			recordRTCommandBuffer(imageIndex);
 
-		//	vk::Semaphore waitSemaphores[] = { presentCompleteSemaphores[frameIndex], computeFinishedSemaphores[frameIndex] };
-		//	vk::PipelineStageFlags waitDestinationStageMask[] = { vk::PipelineStageFlagBits::eVertexInput,
-		//														  vk::PipelineStageFlagBits::eColorAttachmentOutput };
+			vk::Semaphore waitSemaphores[] = { presentCompleteSemaphores[frameIndex] };
+			vk::PipelineStageFlags waitDestinationStageMask[] = { vk::PipelineStageFlagBits::eTransfer };
 
-		//	const vk::SubmitInfo submitInfo{
-		//		.waitSemaphoreCount = 2,
-		//		.pWaitSemaphores = waitSemaphores,
-		//		.pWaitDstStageMask = waitDestinationStageMask,
-		//		.commandBufferCount = 1,
-		//		.pCommandBuffers = &*commandBuffers[frameIndex],
-		//		.signalSemaphoreCount = 1,
-		//		.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex],
-		//	};
+			const vk::SubmitInfo submitInfo{
+				.waitSemaphoreCount = sizeof(waitSemaphores) / sizeof(waitSemaphores[0]),
+				.pWaitSemaphores = waitSemaphores,
+				.pWaitDstStageMask = waitDestinationStageMask,
+				.commandBufferCount = 1,
+				.pCommandBuffers = &*rtCommandBuffers[frameIndex],
+				.signalSemaphoreCount = 1,
+				.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex],
+			};
 
-		//	graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
+			graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
 
-		//	const vk::PresentInfoKHR presentInfoKHR{
-		//		.waitSemaphoreCount = 1,
-		//		.pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
-		//		.swapchainCount = 1,
-		//		.pSwapchains = &*swapChain,
-		//		.pImageIndices = &imageIndex
-		//	};
+			const vk::PresentInfoKHR presentInfoKHR{
+				.waitSemaphoreCount = 1,
+				.pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
+				.swapchainCount = 1,
+				.pSwapchains = &*swapChain,
+				.pImageIndices = &imageIndex
+			};
 
-		//	result = graphicsQueue.presentKHR(presentInfoKHR);
-		//}
+			result = graphicsQueue.presentKHR(presentInfoKHR);
+		}
 
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}

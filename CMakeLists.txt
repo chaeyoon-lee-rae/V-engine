@@ -109,7 +109,8 @@ endif()
 set (SHADER_TARGET ${TEMPLATE_NAME}Shader)
 set (SHADERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shader.slang")
-set (ENTRY_POINTS -entry vertMain -entry fragMain -entry compMain)
+# set (ENTRY_POINTS -entry vertMain -entry fragMain -entry compMain)
+set (ENTRY_POINTS -entry rgenMain -entry missMain -entry chitMain)
 add_custom_command(
   OUTPUT  ${SHADERS_DIR}/slang.spv
   COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
