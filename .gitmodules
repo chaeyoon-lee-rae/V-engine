@@ -1,3 +1,6 @@
 [submodule "external/tinyobjloader"]
 	path = external/tinyobjloader
 	url = git@github.com:tinyobjloader/tinyobjloader.git
+[submodule "external/eva"]
+	path = external/eva
+	url = git@github.com:vAi-studio/eva.git
