@@ -15,6 +15,8 @@
 #include <cassert>
 #include <random>
 
+#include "external/eva/src/eva-runtime.h"
+
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <memory>
 #	include <vulkan/vulkan_raii.hpp>
@@ -24,7 +26,7 @@
 #else
 import vulkan;
 #endif
- 
+	
 constexpr uint32_t WIDTH  = 800;
 constexpr uint32_t HEIGHT = 600;
 
@@ -34,6 +36,8 @@ const std::string TEXTURE_PATH = "assets/textures/viking_room.png";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 constexpr int PARTICLE_COUNT = 8192;
 constexpr int SHADER_GROUP_HANDLE_SIZE = 32;
+
+constexpr vk::Format SWAPCHAIN_FORMAT = vk::Format::eR8G8B8A8Unorm;
 
 const std::vector<char const*> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
@@ -80,36 +84,9 @@ namespace std
 	};
 }
 
-//struct UniformBufferObject {
-//	glm::mat4 model;
-//	glm::mat4 view;
-//	glm::mat4 proj;
-//};
-
-//struct UniformBufferObject {
-//	float deltaTime = 1.0f;
-//};
-
 struct UniformBufferObject {
 	float cameraPos[3];
 	float yFov_degree;
-};
-
-struct Particle {
-	glm::vec2 position;
-	glm::vec2 velocity;
-	glm::vec4 color;
-
-	static vk::VertexInputBindingDescription getBindingDescription() {
-		return { .binding = 0, .stride = sizeof(Particle), .inputRate = vk::VertexInputRate::eVertex };
-	}
-
-	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
-		return { {
-			{.location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Particle, position)},
-			{.location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(Particle, color)},
-		} };
-	};
 };
 
 class HelloTriangleApplication
@@ -240,26 +217,23 @@ private:
 		pickPhysicalDevice();
 		createLogicalDevice();
 		createSwapChain();
-		//createSwapchainImageViews();
-		//createDescriptorSetLayout();
-		//createComputeDescriptorSetLayout();
+
 		createRTDescriptorSetLayout();
-		//createGraphicsPipeline();
-		//createComputePipeline();
+
 		createRTPipeline();
 		createCommandPool();
-		//createDepthResources();
-		//createTextureImage();
-		//createTextureImageView();
-		//createTextureSampler();
-		//loadModel();
-		//createVertexBuffer();
-		//createIndexBuffer();
+
+		createDepthResources();
+
+		createTextureImage();
+		createTextureImageView();
+		createTextureSampler();
+
+		loadModel(); // TODO: model -> BLAS/TLAS
 		createBLAS();
 		createTLAS();
 		createOutImage();
 
-		//createShaderStorageBuffers();
 		createUniformBuffers();
 		
 		createDescriptorPool();
@@ -497,8 +471,8 @@ private:
 		const auto formatIt = std::ranges::find_if(
 			availableFormats,
 			[](const auto& format) {
-				return format.format == vk::Format::eB8G8R8A8Srgb &&
-					format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+				return format.format == SWAPCHAIN_FORMAT &&
+					format.colorSpace == vk::ColorSpaceKHR::eVkColorspaceSrgbNonlinear;
 			});
 		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
 	}
@@ -640,47 +614,6 @@ private:
 		return shaderModule;
 	}
 
-	void createDescriptorSetLayout()
-	{
-		std::array<vk::DescriptorSetLayoutBinding, 2> bindings{{
-			{
-				.binding = 0,
-				.descriptorType = vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = 1,
-				.stageFlags = vk::ShaderStageFlagBits::eVertex,
-			},
-			{
-				.binding = 1,
-				.descriptorType = vk::DescriptorType::eCombinedImageSampler,
-				.descriptorCount = 1,
-				.stageFlags = vk::ShaderStageFlagBits::eFragment
-			}
-		}};
-
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{
-			.bindingCount = static_cast<uint32_t>(bindings.size()),
-			.pBindings = bindings.data(),
-		};
-
-		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
-	}
-
-	void createComputeDescriptorSetLayout()
-	{
-		std::array bindings{
-			vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eCompute, nullptr),
-			vk::DescriptorSetLayoutBinding(1, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute, nullptr),
-			vk::DescriptorSetLayoutBinding(2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute, nullptr)
-		};
-
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{
-			.bindingCount = static_cast<uint32_t>(bindings.size()),
-			.pBindings = bindings.data(),
-		};
-
-		computeDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
-	}
-
 	void createRTDescriptorSetLayout()
 	{
 		vk::DescriptorSetLayoutBinding bindings[] = {
@@ -710,199 +643,6 @@ private:
 		};
 
 		rtDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
-	}
-
-	void createGraphicsPipeline()
-	{
-		// 1. Shader modules
-		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
-
-		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
-			.stage = vk::ShaderStageFlagBits::eVertex,
-			.module = shaderModule,
-			.pName = "vertMain"
-		};
-
-		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{
-			.stage = vk::ShaderStageFlagBits::eFragment,
-			.module = shaderModule,
-			.pName = "fragMain"
-		};
-
-		vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
-		
-		// Vertex input
-		//auto bindingDescription = Vertex::getBindingDescription();
-		//auto attributeDescriptions = Vertex::getAttributeDescriptions();
-		auto bindingDescription = Particle::getBindingDescription();
-		auto attributeDescriptions = Particle::getAttributeDescriptions();
-
-		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
-			.vertexBindingDescriptionCount = 1,
-			.pVertexBindingDescriptions = &bindingDescription,
-			.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
-			.pVertexAttributeDescriptions = attributeDescriptions.data(),
-		};
-
-		// Input assembly
-		//vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-		//	.topology = vk::PrimitiveTopology::eTriangleList,
-		//};
-		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-			.topology = vk::PrimitiveTopology::ePointList,
-			.primitiveRestartEnable = vk::False,
-		};
-
-		// 2. Fixed functions
-		// Dynamic States
-		std::vector<vk::DynamicState> dynamicStates = { vk::DynamicState::eViewport,
-														vk::DynamicState::eScissor, };
-		vk::PipelineDynamicStateCreateInfo dynamicState{
-			.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
-			.pDynamicStates = dynamicStates.data(),
-		};
-
-		// Viewport & scissor
-
-		//vk::Viewport viewport{
-		//	0.0f, 0.0f,
-		//	static_cast<float>(swapchainExtent.width), static_cast<float>(swapchainExtent.height),
-		//	0.0f, 1.0f,
-		//};
-		//vk::Rect2D scissor{ vk::Offset2D{0,0}, swapchainExtent };
-
-		vk::PipelineViewportStateCreateInfo viewportState{
-			.viewportCount = 1,
-			//.pViewports = &viewport,
-			.scissorCount = 1,
-			//.pScissors = &scissor,
-		};
-
-		// Rasterizer
-		vk::PipelineRasterizationStateCreateInfo rasterizer{
-			.depthClampEnable = vk::False,
-			.rasterizerDiscardEnable = vk::False,
-			.polygonMode = vk::PolygonMode::eFill,
-			.cullMode = vk::CullModeFlagBits::eBack,
-			.frontFace = vk::FrontFace::eCounterClockwise,
-			.depthBiasEnable = vk::False,
-			.lineWidth = 1.0f
-		};
-
-		// Multisampling (disabled for now)
-		vk::PipelineMultisampleStateCreateInfo multisampling{
-			.rasterizationSamples = vk::SampleCountFlagBits::e1,
-			.sampleShadingEnable = vk::False,
-		};
-
-		// Color blending
-		// vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-		// 	.blendEnable = vk::False,
-		// };
-
-		vk::PipelineDepthStencilStateCreateInfo depthStencil{
-			//.depthTestEnable = vk::True,
-			.depthTestEnable = vk::False,
-			.depthWriteEnable = vk::True,
-			.depthCompareOp = vk::CompareOp::eLess,
-			.depthBoundsTestEnable = vk::False,
-			.stencilTestEnable = vk::False,
-		};
-
-		vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-			.blendEnable = vk::True,
-			.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
-			.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
-			.colorBlendOp = vk::BlendOp::eAdd,
-			.srcAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
-			.dstAlphaBlendFactor = vk::BlendFactor::eZero,
-			.alphaBlendOp = vk::BlendOp::eAdd,
-			.colorWriteMask = vk::ColorComponentFlagBits::eR |
-							  vk::ColorComponentFlagBits::eG |
-							  vk::ColorComponentFlagBits::eB |
-							  vk::ColorComponentFlagBits::eA,
-		};
-
-		vk::PipelineColorBlendStateCreateInfo colorBlending{
-			.logicOpEnable = vk::False,
-			.logicOp = vk::LogicOp::eCopy,
-			.attachmentCount = 1,
-			.pAttachments = &colorBlendAttachment,
-		};
-
-		// 3. Pipeline layout
-		//vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-		//	.setLayoutCount = 1,
-		//	.pSetLayouts = &*descriptorSetLayout,
-		//	.pushConstantRangeCount = 0
-		//};
-
-		//graphicsPipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
-		vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-		graphicsPipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
-
-		// 4. Put all together and create a graphics pipeline
-		vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo{
-					.stageCount = 2,
-					.pStages = shaderStages,
-					.pVertexInputState = &vertexInputInfo,
-					.pInputAssemblyState = &inputAssembly,
-					.pViewportState = &viewportState,
-					.pRasterizationState = &rasterizer,
-					.pMultisampleState = &multisampling,
-					.pDepthStencilState = &depthStencil,
-					.pColorBlendState = &colorBlending,
-					.pDynamicState = &dynamicState,
-					.layout = graphicsPipelineLayout,
-					.renderPass = nullptr,
-		};
-
-		// +) Dynamic rendering
-		vk::Format depthFormat = findDepthFormat();
-		vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
-			.colorAttachmentCount = 1,
-			.pColorAttachmentFormats = &swapChainSurfaceFormat.format,
-			.depthAttachmentFormat = depthFormat
-		};
-
-		vk::StructureChain<vk::GraphicsPipelineCreateInfo, 
-						   vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain{ 
-			graphicsPipelineCreateInfo, 
-			pipelineRenderingCreateInfo,
-		};
-
-		graphicsPipeline = vk::raii::Pipeline(
-			device, 
-			nullptr, 
-			pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>()
-		);
-
-	}
-
-	// Compute pipeline
-	void createComputePipeline()
-	{
-		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
-
-		vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
-			.stage = vk::ShaderStageFlagBits::eCompute,
-			.module = shaderModule,
-			.pName = "compMain"
-		};
-
-		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-			.setLayoutCount = 1,
-			.pSetLayouts = &*computeDescriptorSetLayout,
-		};
-
-		computePipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
-
-		vk::ComputePipelineCreateInfo pipelineInfo{
-			.stage = computeShaderStageInfo,
-			.layout = *computePipelineLayout,
-		};
-
-		comptePipeline = vk::raii::Pipeline(device, nullptr, pipelineInfo);
 	}
 
 	// RT pipeline
@@ -1464,89 +1204,6 @@ private:
 		endSingleTimeCommands(std::move(commandCopyBuffer));
 	}
 
-	void createVertexBuffer()
-	{
-		vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-		auto [stagingBuffer, stagingBufferMemory] = createBuffer(bufferSize,
-			vk::BufferUsageFlagBits::eTransferSrc,
-			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-		void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-		memcpy(dataStaging, vertices.data(), bufferSize);
-		stagingBufferMemory.unmapMemory();
-
-		std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(bufferSize,
-			vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-			vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-	}
-
-	// Index buffer
-	void createIndexBuffer()
-	{
-		vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-		auto [stagingBuffer, stagingBufferMemory] = createBuffer(bufferSize,
-			vk::BufferUsageFlagBits::eTransferSrc,
-			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-		void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-		memcpy(dataStaging, indices.data(), bufferSize);
-		stagingBufferMemory.unmapMemory();
-
-		std::tie(indexBuffer, indexBufferMemory) = createBuffer(bufferSize,
-			vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-			vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-	}
-
-	// Storage Buffers
-	void createShaderStorageBuffers()
-	{
-		shaderStorageBuffers.clear();
-		shaderStorageBuffersMemory.clear();
-
-		// 파티클 초기화
-		std::default_random_engine rndEngine((unsigned)time(nullptr));
-		std::uniform_real_distribution<float> rndDist(0.0f, 1.0f);
-
-		// 원형 형태의 초기 파티클 위치 설정
-		std::vector<Particle> particles(PARTICLE_COUNT);
-		for (auto& particle : particles) {
-			float r = 0.25f * sqrtf(rndDist(rndEngine));
-			float theta = rndDist(rndEngine) * 2.0f * 3.14159265358979323846f;
-			float x = r * cosf(theta) * HEIGHT / WIDTH;
-			float y = r * sinf(theta);
-			particle.position = glm::vec2(x, y);
-			particle.velocity = normalize(glm::vec2(x, y)) * 0.00025f;
-			particle.color = glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);
-		}
-
-		vk::DeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
-
-		auto [stagingbuffer, stagingbufferMemory] = createBuffer(
-			bufferSize,
-			vk::BufferUsageFlagBits::eTransferSrc,
-			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-		);
-
-		void* dataStaging = stagingbufferMemory.mapMemory(0, bufferSize);
-		memcpy(dataStaging, particles.data(), bufferSize);
-		stagingbufferMemory.unmapMemory();
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-			auto [shaderStorageBufferTemp, shaderStorageBufferTempMemory] = createBuffer(
-				bufferSize,
-				vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-				vk::MemoryPropertyFlagBits::eDeviceLocal
-			);
-
-			copyBuffer(stagingbuffer, shaderStorageBufferTemp, bufferSize);
-			shaderStorageBuffers.emplace_back(std::move(shaderStorageBufferTemp));
-			shaderStorageBuffersMemory.emplace_back(std::move(shaderStorageBufferTempMemory));
-		}
-	}
 
 	// (RT) BLAS
 	void createBLAS()	// geometry들로 이루어짐 -> TLAS는 instance들로 이루어짐
@@ -1808,7 +1465,7 @@ private:
 	// (RT) raytracing에서 출력 대상이 될 Image
 	void createOutImage()
 	{
-		vk::Format format = vk::Format::eR8G8B8A8Unorm;	// issue: swapchain format이랑 같아야하는데 swapchain format인 BGRA_SRGB는 storage bit를 지원하지 않음(optimal tiling)
+		vk::Format format = SWAPCHAIN_FORMAT;	// issue: swapchain format이랑 같아야하는데 swapchain format인 BGRA_SRGB는 storage bit를 지원하지 않음(optimal tiling)
 
 		std::tie(outImage, outImageMemory) = createImage(
 			WIDTH, HEIGHT,
@@ -1818,10 +1475,7 @@ private:
 			vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc,	// 그래픽스에서는 color여야지 쓸 수 있고, comput/rt에서는 storage image에 쓸 수 있다
 			vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-		outImageView = createImageView(outImage, 
-			format, 
-			{ .r = vk::ComponentSwizzle::eB, .b = vk::ComponentSwizzle::eR }, 
-			vk::ImageAspectFlagBits::eColor, 1);
+		outImageView = createImageView(outImage, format, {}, vk::ImageAspectFlagBits::eColor, 1);
 
 		auto commandBuffer = beginSingleTimeCommands();
 		{
@@ -2135,7 +1789,8 @@ private:
 			oldLayout, newLayout, 
 			srcAccessMask, dstAccessMask, 
 			srcStageMask, dstStageMask, 
-			imageAspectMask);
+			imageAspectMask,
+			mipLevels);
 	}
 
 	// Render target
@@ -2181,109 +1836,6 @@ private:
 			.pImageMemoryBarriers = &barrier };	// imageMemoryBarrier를 쓸 것
 
 		commandBuffer.pipelineBarrier2(dependency_info);
-	}
-
-	void recordCommandBuffer(uint32_t imageIndex)
-	{
-		const auto& commandBuffer = commandBuffers[frameIndex];
-		commandBuffer.reset();
-		commandBuffer.begin({});
-
-		//transitionImageLayout(commandBuffer,
-		//	swapChainImages[imageIndex],
-		//	vk::ImageLayout::eUndefined,
-		//	vk::ImageLayout::eColorAttachmentOptimal,
-		//	{},
-		//	vk::AccessFlagBits2::eColorAttachmentWrite,
-		//	vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		//	vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		//	vk::ImageAspectFlagBits::eColor);
-
-		//transitionImageLayout(commandBuffer,
-		//	*depthImage,
-		//	vk::ImageLayout::eUndefined,
-		//	vk::ImageLayout::eDepthAttachmentOptimal,
-		//	vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-		//	vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-		//	vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-		//	vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-		//	vk::ImageAspectFlagBits::eDepth);
-
-		vk::ClearValue clearColor = { .color = {.float32 = {{ 0.0f, 0.0f, 0.0f, 1.0f }} } };
-		vk::RenderingAttachmentInfo attachmentInfo = {
-			.imageView = swapChainImageViews[imageIndex],
-			.imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-			.loadOp = vk::AttachmentLoadOp::eClear,
-			.storeOp = vk::AttachmentStoreOp::eStore,
-			.clearValue = clearColor,
-		};
-
-		vk::ClearValue clearDepth = { .depthStencil = {.depth = 1.0f, .stencil = 0 } };
-		vk::RenderingAttachmentInfo depthAttachmentInfo = {
-			.imageView = depthImageView,
-			.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-			.loadOp = vk::AttachmentLoadOp::eClear,
-			.storeOp = vk::AttachmentStoreOp::eDontCare,
-			.clearValue = clearDepth,
-		};
-
-		vk::RenderingInfo renderingInfo = {
-			.renderArea = {.offset = {0,0}, .extent = swapchainExtent},
-			.layerCount = 1,
-			.colorAttachmentCount = 1,
-			.pColorAttachments = &attachmentInfo,
-			.pDepthAttachment = &depthAttachmentInfo,
-		};
-
-		commandBuffer.beginRendering(renderingInfo);
-		{
-			commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
-
-			//commandBuffer.bindVertexBuffers(0, *vertexBuffer, { 0 });
-			commandBuffer.bindVertexBuffers(0, *shaderStorageBuffers[frameIndex], { 0 });
-			//commandBuffer.bindIndexBuffer(*indexBuffer, 0, 
-			//										   vk::IndexTypeValue<decltype(indices)::value_type>::value);
-
-			commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f,
-													  static_cast<float>(swapchainExtent.width),
-													  static_cast<float>(swapchainExtent.height),
-													  0.0f, 1.0f));
-			commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent));
-
-			//commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, 
-			//											  graphicsPipelineLayout, 0, 
-			//											  *descriptorSets[frameIndex], nullptr);
-
-			//commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
-			commandBuffer.draw(PARTICLE_COUNT, 1, 0, 0);
-		}
-		commandBuffer.endRendering();
-
-		//transitionImageLayout(commandBuffer,
-		//	swapChainImages[imageIndex],
-		//	vk::ImageLayout::eColorAttachmentOptimal,
-		//	vk::ImageLayout::ePresentSrcKHR,
-		//	vk::AccessFlagBits2::eColorAttachmentWrite,
-		//	{},
-		//	vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		//	vk::PipelineStageFlagBits2::eBottomOfPipe,
-		//	vk::ImageAspectFlagBits::eColor);
-
-		commandBuffer.end();
-	}
-
-	void recordComputeCommandBuffer()
-	{
-		const auto& commandBuffer = computeCommandBuffers[frameIndex];
-		commandBuffer.reset();
-		commandBuffer.begin({});
-		// Compute pipeline
-		{
-			commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *comptePipeline);
-			commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *computePipelineLayout, 0, *descriptorSets[frameIndex], {});
-			commandBuffer.dispatch(PARTICLE_COUNT / 256, 1, 1);
-		}
-		commandBuffer.end();
 	}
 
 	void recordRTCommandBuffer(const uint32_t imageIndex)
