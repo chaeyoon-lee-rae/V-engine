@@ -11,14 +11,6 @@ if(MSVC)
   string(APPEND CMAKE_CXX_FLAGS " /utf-8")
 endif()
 
-# Add option to enable/disable C++ 20 module
-option(ENABLE_CPP20_MODULE "Enable C++ 20 module support for Vulkan" ON)
-
-# Enable C++ module dependency scanning only if C++ 20 module is enabled
-if(ENABLE_CPP20_MODULE)
-  set(CMAKE_CXX_SCAN_FOR_MODULES ON)
-endif()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 
 find_package(glfw3 REQUIRED)
@@ -28,55 +20,10 @@ find_package(tinyobjloader REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIR tiny_gltf.h REQUIRED)
 find_package(KTX REQUIRED)
 
-# Set up Vulkan C++ module only if enabled
-if(ENABLE_CPP20_MODULE)
-  add_library(VulkanCppModule)
-  add_library(Vulkan::cppm ALIAS VulkanCppModule)
-
-  target_compile_definitions(VulkanCppModule PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1 VULKAN_HPP_NO_UNION_CONSTRUCTORS=1 VULKAN_HPP_CXX_MODULE_EXPERIMENTAL_WARNING)
-  target_include_directories(VulkanCppModule PUBLIC "${Vulkan_INCLUDE_DIR}")
-  target_link_libraries(VulkanCppModule PUBLIC Vulkan::Vulkan)
-
-  set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 23)
-
-  # Add MSVC-specific compiler options for proper C++ module support
-  if(MSVC)
-    target_compile_options(VulkanCppModule PRIVATE
-      /std:c++latest      # Use latest C++ standard for better module support
-      /permissive-        # Standards conformance mode
-      /Zc:__cplusplus     # Enable correct __cplusplus macro
-      /EHsc               # Enable C++ exception handling
-      /Zc:preprocessor    # Use conforming preprocessor
-      /translateInclude   # Automatically translate #include to import for standard library
-    )
-  endif()
-
-  target_sources(VulkanCppModule
-    PUBLIC
-    FILE_SET cxx_modules TYPE CXX_MODULES
-    BASE_DIRS
-    "${Vulkan_INCLUDE_DIR}"
-    FILES
-    "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
-    "${Vulkan_INCLUDE_DIR}/vulkan/vulkan_video.cppm"
-  )
-
-
-  # Add the vulkan.cppm file directly as a source file
-  target_sources(VulkanCppModule
-    PRIVATE
-    "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
-    "${Vulkan_INCLUDE_DIR}/vulkan/vulkan_video.cppm"
-  )
-else()
-  # Create a dummy interface library when C++ 20 module is disabled
-  add_library(VulkanCppModule INTERFACE)
-  add_library(Vulkan::cppm ALIAS VulkanCppModule)
-  target_link_libraries(VulkanCppModule INTERFACE Vulkan::Vulkan)
-  target_compile_definitions(VulkanCppModule
-    INTERFACE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1 VULKAN_HPP_NO_UNION_CONSTRUCTORS=1
-  )
-endif()
+# Add eva backend
+set(EVA_ENABLE_WINDOW ON CACHE BOOL "Enable window support for eva" FORCE)
+set(EVA_ENABLE_RAYTRACING ON CACHE BOOL "Enable raytracing support for eva" FORCE)
+add_subdirectory(external/eva)
 
 find_package(stb REQUIRED)
 set(STB_INCLUDEDIR ${stb_INCLUDE_DIRS})
@@ -85,19 +32,18 @@ find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 
 set(TEMPLATE_DIR ${CMAKE_BINARY_DIR}/${TEMPLATE_NAME})
 
-add_executable (${TEMPLATE_NAME} main.cpp)
+add_executable (${TEMPLATE_NAME} legacy/main.cpp)
 set_target_properties (${TEMPLATE_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TEMPLATE_DIR})
 set_target_properties (${TEMPLATE_NAME} PROPERTIES CXX_STANDARD 23)
-target_link_libraries (${TEMPLATE_NAME} Vulkan::cppm glfw)
+target_link_libraries (${TEMPLATE_NAME} eva glfw)
 target_include_directories (${TEMPLATE_NAME} PRIVATE ${STB_INCLUDEDIR} ${TINYGLTF_INCLUDE_DIR})
 
-# Add compile definition if C++ 20 module is enabled
-if(ENABLE_CPP20_MODULE)
-  target_compile_definitions(${TEMPLATE_NAME} PRIVATE USE_CPP20_MODULES=1)
-endif()
-
 # Define VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS to treat VK_ERROR_OUT_OF_DATE_KHR as a success code
-target_compile_definitions(${TEMPLATE_NAME} PRIVATE "VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS" )
+target_compile_definitions(${TEMPLATE_NAME} PRIVATE 
+    "VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS"
+    "VULKAN_HPP_NO_STRUCT_CONSTRUCTORS"
+    "VULKAN_HPP_NO_UNION_CONSTRUCTORS"
+)
 
 if(WIN32)
   if(${CMAKE_GENERATOR} MATCHES "Visual Studio.*")
@@ -108,19 +54,34 @@ endif()
 # Slang shader
 set (SHADER_TARGET ${TEMPLATE_NAME}Shader)
 set (SHADERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shader.slang")
-# set (ENTRY_POINTS -entry vertMain -entry fragMain -entry compMain)
-set (ENTRY_POINTS -entry rgenMain -entry missMain -entry chitMain)
-add_custom_command(
-  OUTPUT  ${SHADERS_DIR}/slang.spv
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
-  COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCES} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name ${ENTRY_POINTS} -o ${SHADERS_DIR}/slang.spv
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-  DEPENDS ${SHADER_SOURCES}
-  COMMENT "Compiling Slang Shaders"
-  VERBATIM
+
+set(SLANG_SRC ${SHADERS_DIR}/raytracing.slang)
+
+set(RT_TARGETS 
+  "rgenMain,raytracing.rgen.spv"
+  "missMain,raytracing.rmiss.spv"
+  "chitMain,raytracing.rchit.spv"
 )
-add_custom_target(${SHADER_TARGET} DEPENDS ${SHADERS_DIR}/slang.spv)
+
+set(SPV_OUTPUTS "")
+foreach(TARGET_INFO_STR IN LISTS RT_TARGETS)
+  string(REPLACE "," ";" TARGET_INFO "${TARGET_INFO_STR}")
+  list(GET TARGET_INFO 0 ENTRY_POINT)
+  list(GET TARGET_INFO 1 OUTPUT_NAME)
+  set(SPV_FILE ${SHADERS_DIR}/${OUTPUT_NAME})
+  list(APPEND SPV_OUTPUTS ${SPV_FILE})
+  add_custom_command(
+    OUTPUT  ${SPV_FILE}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
+    COMMAND ${SLANGC_EXECUTABLE} ${SLANG_SRC} -target spirv -profile spirv_1_4 -emit-spirv-directly -entry ${ENTRY_POINT} -o ${SPV_FILE}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    DEPENDS ${SLANG_SRC}
+    COMMENT "Compiling Slang Shader: ${ENTRY_POINT} -> ${OUTPUT_NAME}"
+    VERBATIM
+  )
+endforeach()
+
+add_custom_target(${SHADER_TARGET} DEPENDS ${SPV_OUTPUTS})
 add_dependencies(${TEMPLATE_NAME} ${SHADER_TARGET})
 
 # Assets

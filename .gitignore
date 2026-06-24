@@ -52,6 +52,8 @@ out/**
 memory/
 assets/
 assets/**
+.agents/
+.agents/**
 
 # Compiled shaders (output of slangc)
 shaders/*.spv
